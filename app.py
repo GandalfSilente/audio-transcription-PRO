@@ -740,13 +740,18 @@ class TranscriptionWindow(Adw.ApplicationWindow):
         if switch.get_active():
             self._check_pro_model_async()
         else:
+            if self._pro_backend is not None and self._worker.is_busy():
+                self._restoring_ui = True
+                switch.set_active(True)
+                self._restoring_ui = False
+                self._show_toast(
+                    "Attendi la fine dell'operazione prima di disattivare PRO."
+                )
+                return
             self._config["pro_enabled"] = False
             self._persist_current_config()
             if self._pro_backend is not None:
-                self._set_pro_status("● Modello caricato", "ready")
-                self._pro_hint.set_text(
-                    f"{self._pro_backend.label} è in memoria; PRO è disattivato."
-                )
+                self._on_pro_release_clicked(self._pro_release_btn)
             else:
                 self._set_pro_status("● Spento")
 
