@@ -44,7 +44,7 @@ Progettata per avviarsi istantaneamente senza browser né server web locali, con
 | Sistema Operativo | App Desktop (`app.py`) | CLI (`trascrivi.py`) | Note |
 | --- | :---: | :---: | --- |
 | **Linux** (Ubuntu 22.04/24.04+, Fedora, Debian, Arch con GNOME/Wayland o X11) | ✅ Pieno supporto | ✅ Pieno supporto | Consigliato GTK 4.12+ e Libadwaita 1.4+ |
-| **Windows 11** (tramite **WSL2 + WSLg** oppure **MSYS2 / Python nativo**) | ✅ Supportata | ✅ Pieno supporto | Con **WSL2 + WSLg** hai sia la finestra GUI nativa su Windows sia l'accelerazione **GPU NVIDIA CUDA** completa |
+| **Windows 11** (**WSL2 + WSLg** per l'app completa; Python nativo per la CLI) | ✅ Tramite WSL2 | ✅ | WSLg mostra la GUI su Windows; CUDA richiede driver NVIDIA compatibili. Il percorso MSYS2 è avanzato e non garantisce tutte le dipendenze |
 | **macOS** (Apple Silicon M1/M2/M3/M4 e Intel tramite **Homebrew**) | ✅ Supportata | ✅ Pieno supporto | GTK 4 + Libadwaita via Homebrew; trascrizione in modalità CPU `int8` automatica |
 
 ### Requisiti hardware (GPU / CPU / RAM)
@@ -125,7 +125,7 @@ python3 -m venv .venv
 .venv/bin/pip install -r requirements.txt
 ```
 
-> **Solo CPU (senza GPU NVIDIA)**: puoi installare unicamente `.venv/bin/pip install faster-whisper` senza i pacchetti `nvidia-cublas-cu12` e `nvidia-cudnn-cu12`.
+> **Solo CPU (senza GPU NVIDIA)**: installa `.venv/bin/pip install faster-whisper onnx-asr` invece di `requirements.txt`; così mantieni Whisper e Parakeet senza installare i pacchetti CUDA NVIDIA.
 >
 > **Opzionale — Nemotron 3.5 LIVE nativo (GPU CUDA)**: per usare `nvidia/nemotron-3.5-asr-streaming-0.6b` al posto del fallback Whisper nel tasto **LIVE (Microfono)**:
 > ```bash
@@ -159,6 +159,9 @@ Windows 11 include nativamente **WSLg** (che mostra le finestre grafiche Linux d
    .venv/bin/python app.py
    ```
    *(La finestra dell'app apparirà direttamente sul desktop di Windows 11; i file del tuo PC Windows sono accessibili in `/mnt/c/Users/<TuoUtente>/Downloads`.)*
+4. Per avviare l'app con doppio clic, usa il file [`avvia-pro-wsl.bat`](avvia-pro-wsl.bat) dal repository in Windows. Di default avvia `~/audio-transcription-PRO` nella distro `Ubuntu-24.04`; modifica le prime due variabili del `.bat` se hai scelto nomi o percorsi diversi. WSL e l'ambiente `.venv` devono essere già installati con i passaggi sopra.
+
+Per usare PRO in WSL2, installa Ollama o LM Studio **nella stessa distro WSL** e scarica lì il modello: i servizi installati solo su Windows non sono automaticamente raggiungibili dall'app Linux tramite `127.0.0.1`.
 
 ### Metodo B — Windows 11 nativo (senza WSL)
 - **Solo CLI (`trascrivi.py`) con Python per Windows**:
@@ -170,8 +173,10 @@ Windows 11 include nativamente **WSLg** (che mostra le finestre grafiche Linux d
   .venv\Scripts\pip install faster-whisper
   .venv\Scripts\python trascrivi.py "C:\percorso\del\file.mp3"
   ```
-  *(Per usare CUDA su Windows nativo installa CUDA 12 + cuBLAS/cuDNN per Windows oppure aggiungi le DLL NVIDIA al `PATH`; altrimenti userà automaticamente la CPU in `int8`.)*
+  *(Questa modalità CLI non include l'interfaccia GTK né la correzione PRO. Per l'app completa usa WSL2 + WSLg. Per usare CUDA su Windows nativo installa CUDA 12 + cuBLAS/cuDNN per Windows oppure aggiungi le DLL NVIDIA al `PATH`; altrimenti userà automaticamente la CPU in `int8`.)*
 - **App Desktop GUI (`app.py`) tramite MSYS2 (UCRT64)**:
+
+  *(Percorso nativo avanzato: l'app e le dipendenze devono essere compatibili con i pacchetti MSYS2 installati; per un'installazione completa e riproducibile, incluso PRO, è preferibile WSL2 + WSLg.)*
   1. Installa [MSYS2](https://www.msys2.org/) e apri il terminale **MSYS2 UCRT64**.
   2. Installa Python, GTK 4, Libadwaita e PyGObject:
      ```bash
@@ -184,7 +189,7 @@ Windows 11 include nativamente **WSLg** (che mostra le finestre grafiche Linux d
      git clone https://github.com/GandalfSilente/audio-transcription-PRO.git
      cd audio-transcription-PRO
      python3 -m venv --system-site-packages .venv
-     .venv/bin/pip install faster-whisper
+     .venv/bin/pip install faster-whisper onnx-asr
      .venv/bin/python app.py
      ```
 
@@ -206,7 +211,7 @@ Su macOS l'interfaccia GTK 4 + Libadwaita funziona nativamente tramite **Homebre
    cd audio-transcription-PRO
    $(brew --prefix python@3.12)/bin/python3.12 -m venv --system-site-packages .venv
    .venv/bin/pip install --upgrade pip
-   .venv/bin/pip install faster-whisper
+   .venv/bin/pip install faster-whisper onnx-asr
    ```
 4. Avvia l'app desktop (o lo script CLI):
    ```bash
@@ -214,7 +219,7 @@ Su macOS l'interfaccia GTK 4 + Libadwaita funziona nativamente tramite **Homebre
    # oppure da terminale:
    .venv/bin/python trascrivi.py /percorso/del/file.m4a
    ```
-   *(Su Mac consigliamo di selezionare il modello **`large-v3-turbo`** dal menu a tendina per ottenere i tempi di trascrizione migliori su CPU Apple Silicon.)*
+   *(Installa `faster-whisper` e `onnx-asr` per avere Whisper e Parakeet. Su Mac consigliamo `large-v3-turbo` per prestazioni migliori su CPU. Per PRO installa Ollama o LM Studio e un modello locale.)*
 
 ---
 
@@ -303,6 +308,7 @@ osacompile -o ~/Desktop/"Trascrizione Audio.app" \
 - `diarizer.py` — Motore di riconoscimento voci ONNX leggero (`WeSpeaker ResNet34` via `onnxruntime` + clustering NumPy, senza PyTorch).
 - `live.py` — Trascrizione LIVE da microfono (cattura audio a chunk, Nemotron o fallback Whisper).
 - `trascrivi.py` — Utility CLI indipendente con `large-v3-turbo`.
+- `avvia-pro-wsl.bat` — Launcher Windows per aprire l'app completa nell'ambiente WSL2 configurato.
 - `requirements.txt` — Dipendenze Python per la `.venv`.
 - `Trascrizioni/` — Cartella generata automaticamente per i file `.txt` prodotti (ignorata da Git).
 
