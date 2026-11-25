@@ -1,8 +1,8 @@
 # Trascrizione Audio Locale (GTK 4 + Libadwaita + faster-whisper)
 
-[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](#licenza-e-disclaimer) [![License: Apache-2.0](https://img.shields.io/badge/License-Apache_2.0-green.svg)](#licenza-e-disclaimer)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE-MIT) [![License: Apache-2.0](https://img.shields.io/badge/License-Apache_2.0-green.svg)](LICENSE-APACHE)
 
-Applicazione desktop nativa per Linux (con script CLI incluso) per trascrivere file audio e video lunghi **100% in locale e offline**, sfruttando `faster-whisper` con accelerazione **GPU NVIDIA CUDA** (e fallback automatico su CPU) e filtro vocale **VAD**.
+Applicazione desktop nativa per Linux (con script CLI incluso) per trascrivere file audio e video lunghi **localmente** con `faster-whisper`, accelerazione **GPU NVIDIA CUDA** (e fallback automatico su CPU) e filtro vocale **VAD**. Dopo aver scaricato i modelli necessari, la trascrizione può funzionare offline.
 
 Progettata per avviarsi istantaneamente senza browser né server web locali, con supporto a Drag & Drop nativo Wayland, coda multi-file e profili di contesto personalizzabili per adattare il riconoscimento a qualsiasi disciplina (medicina, fisica, informatica, ecc.).
 
@@ -310,15 +310,17 @@ osacompile -o ~/Desktop/"Trascrizione Audio.app" \
 
 ## Privacy
 
-- Nessun dato audio, video o testuale viene mai inviato a server esterni.
-- I file sorgente vengono letti direttamente dal disco senza creare copie temporanee e **non vengono mai modificati né eliminati**.
-- I profili personalizzati e le preferenze dell'interfaccia sono salvati localmente in `~/.config/trascrizione-audio/config.json`, separati dal repository.
-- La cartella `Trascrizioni/` è esclusa dal tracciamento Git tramite `.gitignore`.
+- L'app elabora localmente audio, video e trascrizioni; non li invia a servizi cloud.
+- Il primo utilizzo o l'installazione di modelli aggiuntivi può richiedere Internet per scaricare pesi e dipendenze (per esempio da Hugging Face). Questi download non includono le registrazioni o le trascrizioni. Dopo aver scaricato i modelli necessari, l'inferenza può funzionare offline.
+- Con PRO attivo, la trascrizione e il contesto selezionato vengono inviati al modello tramite l'API locale di Ollama (`127.0.0.1:11434`) o LM Studio (`127.0.0.1:1234`). L'app non invia questo testo a un servizio LLM cloud; verifica comunque le impostazioni e l'informativa del runtime locale installato.
+- I file originali non vengono modificati o eliminati. Le trascrizioni generate sono salvate localmente in `Trascrizioni/`.
+- Profili e preferenze sono salvati in `~/.config/trascrizione-audio/config.json`, fuori dal repository.
+- `Trascrizioni/` è esclusa da Git tramite `.gitignore`: questo evita il tracciamento Git, ma non cifra né cancella i file locali.
 
 ---
 
 ## Licenza e Disclaimer
 
-- **Doppia licenza**: il codice sorgente di questo progetto è rilasciato sotto licenza **MIT** e **Apache License 2.0**, a scelta dell'utente.
+- **Doppia licenza**: il codice sorgente è disponibile, a scelta dell'utente, secondo i termini di [MIT](LICENSE-MIT) oppure [Apache License 2.0](LICENSE-APACHE).
 - **Componenti di terze parti**: i modelli e le librerie esterni eventualmente scaricati o utilizzati (tra cui Whisper / `faster-whisper`, Parakeet, WeSpeaker e Nemotron) restano soggetti alle rispettive licenze originali.
 - **Esclusione di responsabilità**: il software è fornito *"così com'è"* (*"AS IS"*), senza alcuna garanzia esplicita o implicita. Gli autori non assumono alcuna responsabilità per eventuali danni o usi impropri: l'utente finale è l'unico responsabile dell'utilizzo dello strumento e del pieno rispetto delle normative vigenti (incluse quelle su privacy, consenso alle registrazioni audio/video e diritto d'autore).
