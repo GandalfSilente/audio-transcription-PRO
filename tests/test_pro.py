@@ -225,16 +225,30 @@ class ProTests(unittest.TestCase):
         self.assertEqual(" ".join(chunks), text)
         self.assertTrue(all(len(chunk) <= 9 for chunk in chunks))
 
+    def test_rename_speaker_tags_in_corrected_text(self) -> None:
+        text = "[Voce 1]\nCiao.\n\n[Voce 2]\nBuongiorno."
+        renamed = engine.rename_speaker_tags(
+            text,
+            {"Voce 1": "Voce 1", "Voce 2": "Voce 2"},
+            {"Voce 1": "Anna", "Voce 2": "Luca"},
+        )
+        self.assertEqual(renamed, "[Anna]\nCiao.\n\n[Luca]\nBuongiorno.")
+
     @patch("pro.ensure_local_model")
-    @patch("pro.correct_transcript", return_value="Polished transcript.")
+    @patch(
+        "pro.correct_transcript",
+        return_value="[Voce 1]\nPolished transcript.",
+    )
     def test_engine_pro_stage_keeps_original_and_saves_new_output(
         self, _correct, _ensure
     ) -> None:
         with tempfile.TemporaryDirectory() as directory:
             raw_path = Path(directory) / "lecture.txt"
-            raw_path.write_text("Rough transcript.", encoding="utf-8")
+            raw_path.write_text("[Voce 1]\nRough transcript.", encoding="utf-8")
             worker = engine.TranscriptionWorker(lambda _state: None)
             worker._state["txt_path"] = str(raw_path)
+            worker._state["speakers"] = ["Voce 1"]
+            worker._state["speaker_names"] = {"Voce 1": "Voce 1"}
             job = engine.TranscriptionJob(
                 Path(directory) / "lecture.wav",
                 initial_prompt="Lezione di fisica: Hamiltoniana, quadrupolo.",
@@ -247,9 +261,15 @@ class ProTests(unittest.TestCase):
             snapshot = worker.get_snapshot()
             corrected_path = Path(snapshot["txt_path"])
             self.assertEqual(snapshot["status"], "done")
-            self.assertEqual(raw_path.read_text(encoding="utf-8"), "Rough transcript.")
+            self.assertEqual(snapshot["speakers"], ["Voce 1"])
+            self.assertEqual(snapshot["speaker_blocks"], [])
             self.assertEqual(
-                corrected_path.read_text(encoding="utf-8"), "Polished transcript.\n"
+                raw_path.read_text(encoding="utf-8"),
+                "[Voce 1]\nRough transcript.",
+            )
+            self.assertEqual(
+                corrected_path.read_text(encoding="utf-8"),
+                "[Voce 1]\nPolished transcript.\n",
             )
             _correct.assert_called_once()
             self.assertEqual(_correct.call_args.kwargs["provider"], "lmstudio")

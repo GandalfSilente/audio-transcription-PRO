@@ -1519,25 +1519,49 @@ class TranscriptionWindow(Adw.ApplicationWindow):
     def _apply_speaker_renames(self, new_names: dict[str, str]) -> None:
         blocks = self._last_state.get("speaker_blocks") or []
         txt_path_str = self._last_state.get("txt_path", "")
-        if not blocks:
+        if not blocks and not txt_path_str:
             return
 
-        self._last_state["speaker_names"] = dict(new_names)
-        self._last_state["lines"] = engine.format_blocks(
-            blocks, speaker_names=new_names, show_timestamps=False
-        )
-        self._last_state["ts_lines"] = engine.format_blocks(
-            blocks, speaker_names=new_names, show_timestamps=True
-        )
-        self._render_transcript(auto_scroll=False)
-
+        current_names = dict(self._last_state.get("speaker_names") or {})
         if txt_path_str:
             txt_path = Path(txt_path_str)
             try:
-                engine.save_blocks_to_txt(txt_path, blocks, speaker_names=new_names)
-                self._show_toast(f"Voci rinominate e salvate in {txt_path.name}")
+                if blocks:
+                    engine.save_blocks_to_txt(
+                        txt_path, blocks, speaker_names=new_names
+                    )
+                else:
+                    content = txt_path.read_text(encoding="utf-8")
+                    txt_path.write_text(
+                        engine.rename_speaker_tags(content, current_names, new_names),
+                        encoding="utf-8",
+                    )
             except OSError as err:
                 self._show_toast(f"Errore salvataggio .txt: {err}")
+                return
+
+        if blocks:
+            lines = engine.format_blocks(
+                blocks, speaker_names=new_names, show_timestamps=False
+            )
+            ts_lines = engine.format_blocks(
+                blocks, speaker_names=new_names, show_timestamps=True
+            )
+        else:
+            lines = [
+                engine.rename_speaker_tags(line, current_names, new_names)
+                for line in self._last_state.get("lines", [])
+            ]
+            ts_lines = [
+                engine.rename_speaker_tags(line, current_names, new_names)
+                for line in self._last_state.get("ts_lines", [])
+            ]
+        self._last_state["speaker_names"] = dict(new_names)
+        self._last_state["lines"] = lines
+        self._last_state["ts_lines"] = ts_lines
+        self._render_transcript(auto_scroll=False)
+        if txt_path_str:
+            self._show_toast(f"Voci rinominate e salvate in {Path(txt_path_str).name}")
 
     def _on_live_clicked(self, _button: Gtk.Button) -> None:
         if self._worker.is_busy():

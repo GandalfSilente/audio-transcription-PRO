@@ -510,6 +510,18 @@ def format_blocks(
     return rendered
 
 
+def rename_speaker_tags(
+    text: str,
+    current_names: dict[str, str],
+    new_names: dict[str, str],
+) -> str:
+    for speaker, new_name in new_names.items():
+        current_name = current_names.get(speaker, speaker)
+        if current_name != new_name:
+            text = text.replace(f"[{current_name}]", f"[{new_name}]")
+    return text
+
+
 def save_blocks_to_txt(
     txt_path: Path,
     blocks: list[dict[str, Any]],
@@ -1083,6 +1095,8 @@ class TranscriptionWorker:
         started_at = time.time()
         snapshot = self.get_snapshot()
         raw_path = Path(str(snapshot.get("txt_path", "")))
+        speakers = list(snapshot.get("speakers") or [])
+        speaker_names = dict(snapshot.get("speaker_names") or {})
         self._update_state(
             status="pro",
             progress=0.0,
@@ -1139,8 +1153,8 @@ class TranscriptionWorker:
                 lines=paragraphs,
                 ts_lines=paragraphs,
                 speaker_blocks=[],
-                speakers=[],
-                speaker_names={},
+                speakers=speakers,
+                speaker_names=speaker_names,
                 txt_path=str(corrected_path),
                 error="",
                 pro_error=False,
