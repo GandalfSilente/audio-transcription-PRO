@@ -341,7 +341,10 @@ class TranscriptionWindow(Adw.ApplicationWindow):
         pro_heading.append(pro_label)
         pro_info.append(pro_heading)
         pro_hint = Gtk.Label(
-            label="Richiede un modello installato e caricato in Ollama o LM Studio.",
+            label=(
+                "LM Studio avvia automaticamente server e modello installato; "
+                "Ollama richiede il servizio attivo."
+            ),
             xalign=0.0,
         )
         pro_hint.add_css_class("hint-label")
@@ -700,14 +703,18 @@ class TranscriptionWindow(Adw.ApplicationWindow):
     def _check_pro_model_async(self) -> None:
         self._pro_checking = True
         self._pro_switch.set_sensitive(False)
-        self._status_label.set_text("Verifica del modello PRO locale...")
+        self._status_label.set_text("Verifica e avvio automatico del modello PRO...")
         threading.Thread(target=self._check_pro_model, daemon=True).start()
 
     def _check_pro_model(self) -> None:
         try:
             import pro
 
-            backend = pro.detect_local_backend()
+            backend = pro.ensure_local_backend(
+                progress=lambda message: GLib.idle_add(
+                    self._status_label.set_text, message
+                )
+            )
             GLib.idle_add(self._finish_pro_model_check, backend, "")
         except Exception as exc:
             GLib.idle_add(self._finish_pro_model_check, None, str(exc))

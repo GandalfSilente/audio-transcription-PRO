@@ -60,6 +60,36 @@ class ProTests(unittest.TestCase):
         with self.assertRaisesRegex(pro.ModelUnavailable, "qwen2.5-coder-7b"):
             pro.detect_local_backend()
 
+    @patch("pro.detect_local_backend")
+    @patch("pro._lmstudio_disk_models")
+    @patch("pro._lmstudio_server_available", return_value=False)
+    @patch("pro._run_lms")
+    def test_pro_switch_starts_server_and_loads_installed_model(
+        self, run_lms, _server, disk_models, detect
+    ) -> None:
+        backend = pro.LocalBackend(
+            "lmstudio", "qwen2.5-coder-7b", "LM Studio • qwen2.5-coder-7b"
+        )
+        detect.side_effect = [
+            pro.ModelUnavailable("Model is not loaded"),
+            backend,
+        ]
+        disk_models.return_value = [
+            {
+                "modelKey": "qwen2.5-coder-7b",
+                "displayName": "Qwen 7B",
+                "type": "llm",
+            }
+        ]
+        progress = []
+
+        self.assertEqual(pro.ensure_local_backend(progress.append), backend)
+        self.assertEqual(run_lms.call_args_list[0].args, ("server", "start"))
+        self.assertEqual(run_lms.call_args_list[1].args, (
+            "load", "qwen2.5-coder-7b", "--yes", "--auto"
+        ))
+        self.assertTrue(any("Caricamento automatico" in message for message in progress))
+
     @patch("pro._read_json")
     def test_uses_installed_ollama_model_when_available(self, read_json) -> None:
         read_json.side_effect = [

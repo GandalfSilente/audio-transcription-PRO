@@ -17,7 +17,7 @@ Progettata per avviarsi istantaneamente senza browser né server web locali, con
   - `Combinato (Ensemble: large-v3-turbo + large-v3)`: doppio passaggio con confronto sulla confidenza (`avg_logprob`) per migliorare i segmenti incerti mantenendo basso il picco di VRAM.
   - `large-v3-turbo`: ultra veloce, ideale per audio molto lunghi o PC meno potenti.
   - `Parakeet TDT 0.6B v3`: modello NVIDIA via ONNX, vedi sotto.
-- **Interruttore PRO (LLM locale)**: dopo la trascrizione, corregge errori e migliora la leggibilità con un modello locale già caricato in LM Studio oppure installato in Ollama. L'originale `.txt` resta invariato; il risultato viene salvato in `.pro.txt`. Se non trova un modello utilizzabile, l'app mostra istruzioni e apre questa guida.
+- **Interruttore PRO (LLM locale)**: dopo la trascrizione, corregge errori e migliora la leggibilità con LM Studio o Ollama. Attivando PRO, LM Studio avvia automaticamente server e modello installato; l'originale `.txt` resta invariato e il risultato viene salvato in `.pro.txt`. Se non trova un modello utilizzabile, l'app mostra istruzioni e apre questa guida.
 - **Profili di contesto personalizzabili**: menu a tendina con preset pronti (*Generale*, *Medicina e Radiologia IT*, *Fisica / Fisica Nucleare EN*, *Fisica e Ingegneria IT*, *Informatica e AI EN/IT*) più un pannello espandibile per scrivere/modificare il prompt tecnico e salvare o eliminare i propri profili personalizzati in `~/.config/trascrizione-audio/config.json` (fuori dal repository Git). Ogni profilo imposta automaticamente la lingua consigliata (sempre sovrascrivibile manualmente) e l'app ricorda le ultime scelte tra un avvio e l'altro.
 - **Rilevamento lingua e VAD calibrato per aule**: selezione lingua (`Automatica IT/EN`, `Italiano`, `Inglese`) e Silero VAD ottimizzato per microfoni d'aula/distanti (`threshold=0.35`, `min_silence_duration_ms=600`, `speech_pad_ms=400`) per evitare tagli delle parole iniziali e ridurre le allucinazioni nei silenzi.
 - **Riconoscimento voci (Speaker Diarization ONNX)**: menu a tendina **Riconoscimento voci** (`NO` predefinito, `SI` per più voci sicure, `Auto` per rilevare automaticamente se parla più di una persona). Assegna `[Voce 1]`, `[Voce 2]`, ... in ordine di apparizione usando un modello ONNX leggero (~26 MB, zero PyTorch, zero token) e, a fine trascrizione, consente di cliccare **Rinomina voci** per sostituire i nomi sia sullo schermo sia nel file `.txt` salvato.
@@ -82,19 +82,18 @@ viene inviato solo al server locale del provider scelto.
 ### LM Studio
 
 1. Installa [LM Studio](https://lmstudio.ai/) e scarica un modello di chat.
-2. Carica il modello in LM Studio e avvia **Local Server** dalla scheda
-   **Developer**. PRO rileva i modelli caricati tramite l'API locale
-   `http://127.0.0.1:1234`.
-3. Riattiva l'interruttore **PRO** nell'app. I modelli installati ma non caricati
-   vengono rilevati, ma non avviati automaticamente per evitare un consumo
-   inatteso di RAM/VRAM.
+2. Abilita il comando CLI `lms` nelle impostazioni di LM Studio.
+3. Attiva **PRO**: l'app avvia automaticamente il Local Server e carica il
+   modello installato più adatto. Il caricamento può richiedere alcuni minuti.
+   I modelli non vengono scaricati automaticamente, per evitare download
+   imprevisti.
 
 Un modello Qwen 7B di tipo *Instruct* è una buona scelta per la correzione.
 Anche i modelli *Coder* possono funzionare, ma un modello generalista è in
 genere più adatto alla revisione di trascrizioni.
 
-Una volta disponibile un modello, riattiva PRO; per disattivare la correzione,
-basta spegnere l'interruttore. La trascrizione standard non cambia.
+Se nessun modello è installato, l'app mostra la guida. Per disattivare la
+correzione, spegni l'interruttore PRO; la trascrizione standard non cambia.
 
 ---
 

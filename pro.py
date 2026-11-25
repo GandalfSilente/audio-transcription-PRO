@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import shutil
 import subprocess
+import time
 import urllib.error
 import urllib.request
 from dataclasses import dataclass
@@ -64,6 +65,40 @@ def _lmstudio_disk_models() -> list[dict]:
         for model in models
         if isinstance(model, dict) and model.get("type") == "llm"
     ]
+
+
+def _run_lms(*args: str, timeout: int) -> None:
+    executable = shutil.which("lms")
+    if not executable:
+        raise ModelUnavailable(
+            "LM Studio CLI `lms` non trovato. Avvia LM Studio e installa il "
+            "comando CLI dalle impostazioni dell'app."
+        )
+    try:
+        result = subprocess.run(
+            [executable, *args],
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired) as error:
+        raise ModelUnavailable(
+            f"Comando LM Studio non completato (`lms {' '.join(args)}`): {error}"
+        ) from error
+    if result.returncode:
+        detail = result.stderr.strip() or result.stdout.strip()
+        raise ModelUnavailable(
+            f"Comando LM Studio fallito (`lms {' '.join(args)}`): "
+            f"{detail or f'codice {result.returncode}'}"
+        )
+
+
+def _lmstudio_server_available() -> bool:
+    return (
+        _read_json(f"{LM_STUDIO_URL}/api/v0/models") is not None
+        or _read_json(f"{LM_STUDIO_URL}/v1/models") is not None
+    )
 
 
 def _model_key(model: dict) -> str:
@@ -175,6 +210,45 @@ def detect_local_backend() -> LocalBackend:
     raise ModelUnavailable(
         "Nessun modello locale trovato. Installa un modello con Ollama oppure "
         "scaricane uno in LM Studio, caricalo e avvia il Local Server."
+    )
+
+
+def ensure_local_backend(
+    progress: Callable[[str], None] | None = None,
+) -> LocalBackend:
+    try:
+        return detect_local_backend()
+    except ModelUnavailable:
+        models = _lmstudio_disk_models()
+        if not models:
+            raise
+
+    model = _preferred(models)
+    model_key = _model_key(model)
+    if not model_key:
+        raise ModelUnavailable("LM Studio non ha restituito un identificativo modello.")
+
+    if not _lmstudio_server_available():
+        if progress:
+            progress("Avvio automatico del Local Server di LM Studio...")
+        _run_lms("server", "start", timeout=30)
+
+    if progress:
+        progress(f"Caricamento automatico del modello {model_key}...")
+    _run_lms("load", model_key, "--yes", "--auto", timeout=600)
+
+    for _ in range(30):
+        try:
+            backend = detect_local_backend()
+            if backend.provider == "lmstudio":
+                return backend
+        except ModelUnavailable:
+            pass
+        time.sleep(1)
+
+    raise ModelUnavailable(
+        f"LM Studio non ha confermato il caricamento di {model_key}. "
+        "Controlla lo stato del modello e riprova."
     )
 
 
