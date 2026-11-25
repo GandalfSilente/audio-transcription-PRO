@@ -187,6 +187,34 @@ button.ready-btn:hover {
     font-weight: 600;
 }
 
+.pro-state {
+    background-color: #252b37;
+    color: #aab5c8;
+    border: 1px solid #394253;
+    border-radius: 999px;
+    padding: 3px 9px;
+    font-size: 11px;
+    font-weight: 700;
+}
+
+.pro-state.busy {
+    background-color: #382f1d;
+    color: #f0cf82;
+    border-color: #65512b;
+}
+
+.pro-state.ready {
+    background-color: #193326;
+    color: #8de0aa;
+    border-color: #2b6542;
+}
+
+.pro-state.error {
+    background-color: #382226;
+    color: #f2a0a8;
+    border-color: #6a3941;
+}
+
 .backend-pill {
     color: #8b95a8;
     font-size: 12px;
@@ -341,24 +369,28 @@ class TranscriptionWindow(Adw.ApplicationWindow):
         pro_badge.add_css_class("queue-pill")
         pro_label = Gtk.Label(label="Correzione con LLM locale", xalign=0.0)
         pro_label.add_css_class("field-label")
+        self._pro_status_label = Gtk.Label(label="● Spento")
+        self._pro_status_label.add_css_class("pro-state")
         pro_heading.append(pro_badge)
         pro_heading.append(pro_label)
+        pro_heading.append(self._pro_status_label)
         pro_info.append(pro_heading)
-        pro_hint = Gtk.Label(
+        self._pro_hint = Gtk.Label(
             label=(
                 "LM Studio e Ollama avviano i servizi in background; se trovi "
                 "più modelli puoi scegliere quale usare."
             ),
             xalign=0.0,
         )
-        pro_hint.add_css_class("hint-label")
-        pro_info.append(pro_hint)
+        self._pro_hint.add_css_class("hint-label")
+        self._pro_hint.set_wrap(True)
+        pro_info.append(self._pro_hint)
         pro_info.set_hexpand(True)
         pro_row.append(pro_info)
         self._pro_release_btn = Gtk.Button(label="Libera memoria")
         self._pro_release_btn.set_sensitive(False)
         self._pro_release_btn.set_tooltip_text(
-            "Scarica il modello PRO dalla memoria; verrà ricaricato al prossimo audio"
+            "Scarica il modello e disattiva PRO; riattivalo per caricarlo di nuovo"
         )
         self._pro_release_btn.connect("clicked", self._on_pro_release_clicked)
         pro_row.append(self._pro_release_btn)
@@ -710,12 +742,28 @@ class TranscriptionWindow(Adw.ApplicationWindow):
         else:
             self._config["pro_enabled"] = False
             self._persist_current_config()
+            if self._pro_backend is not None:
+                self._set_pro_status("● Modello caricato", "ready")
+                self._pro_hint.set_text(
+                    f"{self._pro_backend.label} è in memoria; PRO è disattivato."
+                )
+            else:
+                self._set_pro_status("● Spento")
+
+    def _set_pro_status(self, label: str, state: str = "") -> None:
+        self._pro_status_label.set_text(label)
+        for css_class in ("busy", "ready", "error"):
+            self._pro_status_label.remove_css_class(css_class)
+        if state:
+            self._pro_status_label.add_css_class(state)
 
     def _on_pro_release_clicked(self, _button: Gtk.Button) -> None:
         if self._pro_checking or self._worker.is_busy():
             self._show_toast("Attendi la fine dell'operazione PRO prima di liberare memoria.")
             return
         self._pro_release_btn.set_sensitive(False)
+        self._pro_switch.set_sensitive(False)
+        self._set_pro_status("● Rilascio memoria…", "busy")
         self._status_label.set_text("Rilascio memoria del modello PRO...")
         threading.Thread(target=self._release_pro_model, daemon=True).start()
 
@@ -732,12 +780,20 @@ class TranscriptionWindow(Adw.ApplicationWindow):
     def _finish_pro_release(self, error: str) -> bool:
         if self._pro_cleanup_pending or self._pro_cleanup_done:
             return GLib.SOURCE_REMOVE
-        self._pro_release_btn.set_sensitive(self._pro_backend is not None)
+        self._pro_switch.set_sensitive(True)
         if error:
+            self._pro_release_btn.set_sensitive(self._pro_backend is not None)
+            self._set_pro_status("● Errore rilascio", "error")
+            self._pro_hint.set_text(error)
             self._show_toast(f"Errore rilascio risorse PRO: {error}")
         else:
+            self._pro_backend = None
+            self._pro_release_btn.set_sensitive(False)
+            self._pro_switch.set_active(False)
+            self._set_pro_status("● Memoria liberata")
+            self._pro_hint.set_text("Riattiva PRO per caricare di nuovo un modello.")
             self._show_toast(
-                "Memoria PRO liberata; il modello verrà ricaricato al prossimo audio."
+                "Memoria liberata e PRO disattivato. Riattiva PRO per usare di nuovo il modello."
             )
         return GLib.SOURCE_REMOVE
 
@@ -745,6 +801,8 @@ class TranscriptionWindow(Adw.ApplicationWindow):
         self._pro_checking = True
         self._pro_switch.set_sensitive(False)
         self._pro_release_btn.set_sensitive(False)
+        self._set_pro_status("● Ricerca modelli…", "busy")
+        self._pro_hint.set_text("Ricerca dei modelli chat installati in locale.")
         self._status_label.set_text("Ricerca modelli locali PRO...")
         threading.Thread(target=self._discover_pro_models, daemon=True).start()
 
@@ -768,6 +826,8 @@ class TranscriptionWindow(Adw.ApplicationWindow):
             self._start_pro_model_async(models[0])
         else:
             self._pro_choices = models
+            self._set_pro_status("● Scegli modello", "busy")
+            self._pro_hint.set_text(f"Trovati {len(models)} modelli chat locali.")
             self._show_pro_model_picker(models)
         return GLib.SOURCE_REMOVE
 
@@ -811,6 +871,8 @@ class TranscriptionWindow(Adw.ApplicationWindow):
         self._pro_choices = []
         self._pro_switch.set_sensitive(True)
         self._pro_release_btn.set_sensitive(False)
+        self._set_pro_status("● Spento")
+        self._pro_hint.set_text("Attiva PRO per cercare i modelli locali installati.")
         self._restoring_ui = True
         self._pro_switch.set_active(False)
         self._restoring_ui = False
@@ -831,6 +893,8 @@ class TranscriptionWindow(Adw.ApplicationWindow):
 
     def _start_pro_model_async(self, backend: Any) -> None:
         self._pro_backend = backend
+        self._set_pro_status("● Caricamento…", "busy")
+        self._pro_hint.set_text(backend.label)
         self._status_label.set_text(f"Avvio modello PRO: {backend.label}...")
         threading.Thread(
             target=self._load_pro_model, args=(backend,), daemon=True
@@ -864,6 +928,8 @@ class TranscriptionWindow(Adw.ApplicationWindow):
         if error:
             self._pro_backend = None
             self._pro_release_btn.set_sensitive(False)
+            self._set_pro_status("● Modello non disponibile", "error")
+            self._pro_hint.set_text(error)
             self._restoring_ui = True
             self._pro_switch.set_active(False)
             self._restoring_ui = False
@@ -874,6 +940,10 @@ class TranscriptionWindow(Adw.ApplicationWindow):
         else:
             self._pro_backend = backend
             self._pro_release_btn.set_sensitive(True)
+            self._set_pro_status("● Modello caricato", "ready")
+            self._pro_hint.set_text(
+                f"{backend.label} è pronto per correggere le trascrizioni."
+            )
             self._config["pro_enabled"] = True
             self._persist_current_config()
             self._show_toast(f"PRO attivo: {backend.label}")
