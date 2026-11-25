@@ -1,1 +1,6 @@
 faster-whisper>=1.1.0
+nvidia-cublas-cu12
+nvidia-cudnn-cu12
+onnx-asr
+# Optional for Nemotron 3.5 LIVE streaming (otherwise LIVE falls back to faster-whisper):
+# torch torchaudio nemo_toolkit[asr] matplotlib

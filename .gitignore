@@ -1,7 +1,17 @@
+# Python & virtual environment
 .venv/
 __pycache__/
 *.py[cod]
+*$py.class
+
+# User transcriptions & temporary uploads (never commit private audio/text)
 Trascrizioni/
+.uploads/
+
+# Local OS / editor artifacts
 .DS_Store
-.idea/
+*.swp
+*.swo
 .vscode/
+.idea/
+.playwright-mcp/
