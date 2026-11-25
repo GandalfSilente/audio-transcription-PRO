@@ -152,7 +152,11 @@ class ProTests(unittest.TestCase):
 
         urlopen.return_value = Response()
         self.assertEqual(
-            pro.correct_transcript("Testo grezzo.", provider="ollama"),
+            pro.correct_transcript(
+                "Testo grezzo.",
+                provider="ollama",
+                context="Lezione di radiologia: risonanza magnetica, parenchima.",
+            ),
             "Testo corretto e leggibile.",
         )
         request = urlopen.call_args.args[0]
@@ -160,6 +164,9 @@ class ProTests(unittest.TestCase):
         payload = json.loads(request.data)
         self.assertEqual(payload["model"], pro.OLLAMA_MODEL)
         self.assertFalse(payload["think"])
+        self.assertIn("Contesto specialistico", payload["messages"][1]["content"])
+        self.assertIn("parenchima", payload["messages"][1]["content"])
+        self.assertIn("Testo grezzo.", payload["messages"][1]["content"])
 
     @patch("pro.urllib.request.urlopen")
     def test_correction_uses_lmstudio_openai_api(self, urlopen) -> None:
@@ -230,6 +237,7 @@ class ProTests(unittest.TestCase):
             worker._state["txt_path"] = str(raw_path)
             job = engine.TranscriptionJob(
                 Path(directory) / "lecture.wav",
+                initial_prompt="Lezione di fisica: Hamiltoniana, quadrupolo.",
                 pro_provider="lmstudio",
                 pro_model="qwen2.5-coder-7b-instruct-abliterated",
             )
@@ -253,6 +261,10 @@ class ProTests(unittest.TestCase):
                 "lmstudio",
                 "qwen2.5-coder-7b-instruct-abliterated",
                 progress=ANY,
+            )
+            self.assertEqual(
+                _correct.call_args.kwargs["context"],
+                "Lezione di fisica: Hamiltoniana, quadrupolo.",
             )
 
     @patch("pro.ensure_local_model")

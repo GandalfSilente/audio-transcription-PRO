@@ -1119,6 +1119,7 @@ class TranscriptionWorker:
                 check_cancelled=self._check_cancelled,
                 provider=job.pro_provider,
                 model=job.pro_model,
+                context=job.initial_prompt,
             )
             self._check_cancelled()
             corrected_path = pro.corrected_path_for(raw_path)

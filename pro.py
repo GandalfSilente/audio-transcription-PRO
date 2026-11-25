@@ -437,11 +437,13 @@ def correct_transcript(
     check_cancelled: Callable[[], None] | None = None,
     provider: str = "ollama",
     model: str = OLLAMA_MODEL,
+    context: str = "",
 ) -> str:
     chunks = split_text(text)
     if not chunks:
         raise ValueError("La trascrizione è vuota.")
 
+    context = context.strip()
     corrected: list[str] = []
     for index, chunk in enumerate(chunks, start=1):
         if check_cancelled:
@@ -457,11 +459,23 @@ def correct_transcript(
                     "ortografia, grammatica e punteggiatura; migliora la "
                     "leggibilità con paragrafi naturali. Conserva significato, "
                     "fatti, nomi, ordine, dettagli, timestamp e tag degli "
-                    "speaker. Non riassumere, tradurre o aggiungere "
-                    "informazioni. Restituisci solo il testo corretto."
+                    "speaker. Usa il contesto specialistico solo come indizio: "
+                    "correggi un termine ambiguo solo se frase e contesto lo "
+                    "supportano. Se non sei sicuro, mantieni il testo originale. "
+                    "Se è già corretto, non modificarlo. Non riassumere, tradurre "
+                    "o aggiungere informazioni. Restituisci solo il testo corretto."
                 ),
             },
-            {"role": "user", "content": chunk},
+            {
+                "role": "user",
+                "content": (
+                    "Contesto specialistico (solo come guida terminologica):\n"
+                    f"{context}\n\n"
+                    f"Trascrizione:\n{chunk}"
+                    if context
+                    else chunk
+                ),
+            },
         ]
         if provider == "ollama":
             url = f"{OLLAMA_URL}/api/chat"
