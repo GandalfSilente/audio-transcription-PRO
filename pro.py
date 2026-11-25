@@ -300,7 +300,7 @@ class LocalModelManager:
                 if not self._backend_is_loaded(backend):
                     if progress:
                         progress(f"Caricamento {backend.label}...")
-                    _run_lms("load", backend.model, "--yes", "--auto", timeout=600)
+                    _run_lms("load", backend.model, "--yes", timeout=600)
                     for _ in range(40):
                         if self._backend_is_loaded(backend):
                             break

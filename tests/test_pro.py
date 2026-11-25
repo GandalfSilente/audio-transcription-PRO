@@ -27,7 +27,7 @@ class ProTests(unittest.TestCase):
                 ("daemon", "status"),
                 ("daemon", "up"),
                 ("server", "start"),
-                ("load", "qwen7b", "--yes", "--auto"),
+                ("load", "qwen7b", "--yes"),
             ],
         )
 
