@@ -11,37 +11,65 @@ import engine
 
 
 class ProTests(unittest.TestCase):
-    @patch("pro.urllib.request.urlopen")
-    def test_requires_installed_local_model(self, urlopen) -> None:
-        class Response:
-            def __enter__(self):
-                return self
+    @patch("pro._ollama_backend", return_value=None)
+    @patch(
+        "pro._read_json",
+        return_value={
+            "data": [
+                {
+                    "id": "qwen2.5-coder-7b-instruct-abliterated",
+                    "type": "llm",
+                    "state": "loaded",
+                }
+            ]
+        },
+    )
+    def test_detects_loaded_lmstudio_model(self, _read_json, _ollama) -> None:
+        backend = pro.detect_local_backend()
+        self.assertEqual(backend.provider, "lmstudio")
+        self.assertEqual(backend.model, "qwen2.5-coder-7b-instruct-abliterated")
 
-            def __exit__(self, *_args):
-                return None
+    @patch("pro._ollama_backend", return_value=None)
+    @patch(
+        "pro._read_json",
+        side_effect=[
+            None,
+            {"data": [{"id": "lmstudio-chat-model", "object": "model"}]},
+        ],
+    )
+    def test_detects_loaded_lmstudio_openai_api_model(
+        self, _read_json, _ollama
+    ) -> None:
+        backend = pro.detect_local_backend()
+        self.assertEqual(backend.provider, "lmstudio")
+        self.assertEqual(backend.model, "lmstudio-chat-model")
 
-            def read(self):
-                return b'{"models":[{"name":"qwen3:8b"}]}'
+    @patch("pro._ollama_backend", return_value=None)
+    @patch("pro._lmstudio_disk_models")
+    @patch("pro._read_json", return_value=None)
+    def test_installed_lmstudio_model_requires_load_and_server(
+        self, _read_json, disk_models, _ollama
+    ) -> None:
+        disk_models.return_value = [
+            {
+                "modelKey": "qwen2.5-coder-7b-instruct-abliterated",
+                "displayName": "Qwen 7B",
+                "type": "llm",
+            }
+        ]
+        with self.assertRaisesRegex(pro.ModelUnavailable, "qwen2.5-coder-7b"):
+            pro.detect_local_backend()
 
-        urlopen.return_value = Response()
-        pro.ensure_model_installed()
-        self.assertIn("/api/tags", urlopen.call_args.args[0].full_url)
-
-    @patch("pro.urllib.request.urlopen")
-    def test_missing_model_is_reported(self, urlopen) -> None:
-        class Response:
-            def __enter__(self):
-                return self
-
-            def __exit__(self, *_args):
-                return None
-
-            def read(self):
-                return b'{"models":[]}'
-
-        urlopen.return_value = Response()
-        with self.assertRaisesRegex(pro.ModelUnavailable, pro.MODEL):
-            pro.ensure_model_installed()
+    @patch("pro._read_json")
+    def test_uses_installed_ollama_model_when_available(self, read_json) -> None:
+        read_json.side_effect = [
+            None,
+            None,
+            {"models": [{"name": "qwen3:8b", "model": "qwen3:8b"}]},
+        ]
+        backend = pro.detect_local_backend()
+        self.assertEqual(backend.provider, "ollama")
+        self.assertEqual(backend.model, "qwen3:8b")
 
     @patch("pro.urllib.request.urlopen")
     def test_correction_uses_local_chat_and_preserves_output(self, urlopen) -> None:
@@ -59,14 +87,46 @@ class ProTests(unittest.TestCase):
 
         urlopen.return_value = Response()
         self.assertEqual(
-            pro.correct_transcript("Testo grezzo."),
+            pro.correct_transcript("Testo grezzo.", provider="ollama"),
             "Testo corretto e leggibile.",
         )
         request = urlopen.call_args.args[0]
         self.assertEqual(request.full_url, f"{pro.OLLAMA_URL}/api/chat")
         payload = json.loads(request.data)
-        self.assertEqual(payload["model"], pro.MODEL)
+        self.assertEqual(payload["model"], pro.OLLAMA_MODEL)
         self.assertFalse(payload["think"])
+
+    @patch("pro.urllib.request.urlopen")
+    def test_correction_uses_lmstudio_openai_api(self, urlopen) -> None:
+        class Response:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args):
+                return None
+
+            def read(self):
+                return json.dumps(
+                    {"choices": [{"message": {"content": "Testo corretto."}}]}
+                ).encode()
+
+        urlopen.return_value = Response()
+        self.assertEqual(
+            pro.correct_transcript(
+                "Testo grezzo.",
+                provider="lmstudio",
+                model="qwen2.5-coder-7b-instruct-abliterated",
+            ),
+            "Testo corretto.",
+        )
+        request = urlopen.call_args.args[0]
+        self.assertEqual(
+            request.full_url, f"{pro.LM_STUDIO_URL}/v1/chat/completions"
+        )
+        self.assertEqual(
+            json.loads(request.data)["model"],
+            "qwen2.5-coder-7b-instruct-abliterated",
+        )
 
     def test_corrected_output_does_not_overwrite_existing(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -102,7 +162,11 @@ class ProTests(unittest.TestCase):
             raw_path.write_text("Rough transcript.", encoding="utf-8")
             worker = engine.TranscriptionWorker(lambda _state: None)
             worker._state["txt_path"] = str(raw_path)
-            job = engine.TranscriptionJob(Path(directory) / "lecture.wav")
+            job = engine.TranscriptionJob(
+                Path(directory) / "lecture.wav",
+                pro_provider="lmstudio",
+                pro_model="qwen2.5-coder-7b-instruct-abliterated",
+            )
 
             worker._process_pro_job(job)
 
@@ -113,10 +177,16 @@ class ProTests(unittest.TestCase):
             self.assertEqual(
                 corrected_path.read_text(encoding="utf-8"), "Polished transcript.\n"
             )
+            _correct.assert_called_once()
+            self.assertEqual(_correct.call_args.kwargs["provider"], "lmstudio")
+            self.assertEqual(
+                _correct.call_args.kwargs["model"],
+                "qwen2.5-coder-7b-instruct-abliterated",
+            )
 
     @patch(
         "pro.correct_transcript",
-        side_effect=pro.ModelUnavailable("qwen3:8b is not installed"),
+        side_effect=pro.ModelUnavailable("No local model is loaded"),
     )
     def test_pro_failure_keeps_original_available(self, _correct) -> None:
         with tempfile.TemporaryDirectory() as directory:

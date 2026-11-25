@@ -17,7 +17,7 @@ Progettata per avviarsi istantaneamente senza browser né server web locali, con
   - `Combinato (Ensemble: large-v3-turbo + large-v3)`: doppio passaggio con confronto sulla confidenza (`avg_logprob`) per migliorare i segmenti incerti mantenendo basso il picco di VRAM.
   - `large-v3-turbo`: ultra veloce, ideale per audio molto lunghi o PC meno potenti.
   - `Parakeet TDT 0.6B v3`: modello NVIDIA via ONNX, vedi sotto.
-- **Interruttore PRO (LLM locale)**: dopo la trascrizione, corregge errori e migliora la leggibilità con Ollama e `qwen3:8b`. L'originale `.txt` resta invariato; il risultato viene salvato in `.pro.txt`. Se Ollama o il modello non sono installati, l'app mostra un errore e apre questa guida.
+- **Interruttore PRO (LLM locale)**: dopo la trascrizione, corregge errori e migliora la leggibilità con un modello locale già caricato in LM Studio oppure installato in Ollama. L'originale `.txt` resta invariato; il risultato viene salvato in `.pro.txt`. Se non trova un modello utilizzabile, l'app mostra istruzioni e apre questa guida.
 - **Profili di contesto personalizzabili**: menu a tendina con preset pronti (*Generale*, *Medicina e Radiologia IT*, *Fisica / Fisica Nucleare EN*, *Fisica e Ingegneria IT*, *Informatica e AI EN/IT*) più un pannello espandibile per scrivere/modificare il prompt tecnico e salvare o eliminare i propri profili personalizzati in `~/.config/trascrizione-audio/config.json` (fuori dal repository Git). Ogni profilo imposta automaticamente la lingua consigliata (sempre sovrascrivibile manualmente) e l'app ricorda le ultime scelte tra un avvio e l'altro.
 - **Rilevamento lingua e VAD calibrato per aule**: selezione lingua (`Automatica IT/EN`, `Italiano`, `Inglese`) e Silero VAD ottimizzato per microfoni d'aula/distanti (`threshold=0.35`, `min_silence_duration_ms=600`, `speech_pad_ms=400`) per evitare tagli delle parole iniziali e ridurre le allucinazioni nei silenzi.
 - **Riconoscimento voci (Speaker Diarization ONNX)**: menu a tendina **Riconoscimento voci** (`NO` predefinito, `SI` per più voci sicure, `Auto` per rilevare automaticamente se parla più di una persona). Assegna `[Voce 1]`, `[Voce 2]`, ... in ordine di apparizione usando un modello ONNX leggero (~26 MB, zero PyTorch, zero token) e, a fine trascrizione, consente di cliccare **Rinomina voci** per sostituire i nomi sia sullo schermo sia nel file `.txt` salvato.
@@ -65,24 +65,36 @@ Supporta tutti i principali formati decodificabili da PyAV/FFmpeg:
 
 ---
 
-## Installazione modello PRO
+## Installazione modelli locali PRO
 
-PRO usa Ollama in locale e richiede il modello `qwen3:8b`. L'audio resta sul PC:
-Whisper lo trascrive e Ollama riceve solo il testo locale da correggere.
+PRO usa un modello locale. L'audio resta sul PC: Whisper lo trascrive e il testo
+viene inviato solo al server locale del provider scelto.
+
+### Ollama
 
 1. Installa [Ollama](https://ollama.com/download) e avvia il servizio.
-2. Scarica il modello dal terminale:
+2. Scarica un modello di chat, per esempio:
 
    ```bash
    ollama pull qwen3:8b
    ```
 
-3. Riavvia l'app e attiva l'interruttore **PRO**. Se Ollama o il modello non
-   sono disponibili, l'app mostra un errore e un pulsante per riaprire questa
-   guida.
+### LM Studio
 
-Il download del modello avviene una sola volta. Per disattivare la correzione,
-basta spegnere l'interruttore PRO; la trascrizione standard non cambia.
+1. Installa [LM Studio](https://lmstudio.ai/) e scarica un modello di chat.
+2. Carica il modello in LM Studio e avvia **Local Server** dalla scheda
+   **Developer**. PRO rileva i modelli caricati tramite l'API locale
+   `http://127.0.0.1:1234`.
+3. Riattiva l'interruttore **PRO** nell'app. I modelli installati ma non caricati
+   vengono rilevati, ma non avviati automaticamente per evitare un consumo
+   inatteso di RAM/VRAM.
+
+Un modello Qwen 7B di tipo *Instruct* è una buona scelta per la correzione.
+Anche i modelli *Coder* possono funzionare, ma un modello generalista è in
+genere più adatto alla revisione di trascrizioni.
+
+Una volta disponibile un modello, riattiva PRO; per disattivare la correzione,
+basta spegnere l'interruttore. La trascrizione standard non cambia.
 
 ---
 
@@ -282,7 +294,7 @@ osacompile -o ~/Desktop/"Trascrizione Audio.app" \
 
 - `app.py` — Interfaccia desktop nativa GTK 4 + Libadwaita (Drag & Drop, coda, profili di contesto personalizzabili, interruttore PRO, visualizzazione live, scorciatoie `Ctrl+W`/`Ctrl+Q`).
 - `engine.py` — Motore di trascrizione disaccoppiato dalla GUI (lazy loading CUDA/`faster-whisper`, gestione coda FIFO, preset/persistenza XDG, VAD d'aula, modalità Ensemble, annullamento e rilascio VRAM).
-- `pro.py` — Verifica Ollama/modello installato e correzione locale dei transcript.
+- `pro.py` — Rilevamento dei modelli Ollama/LM Studio e correzione locale delle trascrizioni.
 - `diarizer.py` — Motore di riconoscimento voci ONNX leggero (`WeSpeaker ResNet34` via `onnxruntime` + clustering NumPy, senza PyTorch).
 - `live.py` — Trascrizione LIVE da microfono (cattura audio a chunk, Nemotron o fallback Whisper).
 - `trascrivi.py` — Utility CLI indipendente con `large-v3-turbo`.

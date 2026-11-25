@@ -581,6 +581,8 @@ class TranscriptionJob:
     initial_prompt: str = ""
     diarization_mode: str = "off"
     pro_enabled: bool = False
+    pro_provider: str = ""
+    pro_model: str = ""
 
 
 class TranscriptionWorker:
@@ -1107,6 +1109,8 @@ class TranscriptionWorker:
                 raw_text,
                 progress=report_progress,
                 check_cancelled=self._check_cancelled,
+                provider=job.pro_provider,
+                model=job.pro_model,
             )
             self._check_cancelled()
             corrected_path = pro.corrected_path_for(raw_path)

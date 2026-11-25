@@ -217,6 +217,7 @@ class TranscriptionWindow(Adw.ApplicationWindow):
         self._copy_reset_source_id: int | None = None
         self._save_prompt_source_id: int | None = None
         self._pro_checking = False
+        self._pro_backend: Any = None
 
         self._worker = engine.TranscriptionWorker(self._on_worker_update)
         self._live_transcriber: Any = None
@@ -340,7 +341,7 @@ class TranscriptionWindow(Adw.ApplicationWindow):
         pro_heading.append(pro_label)
         pro_info.append(pro_heading)
         pro_hint = Gtk.Label(
-            label="Richiede Ollama e il modello locale qwen3:8b.",
+            label="Richiede un modello installato e caricato in Ollama o LM Studio.",
             xalign=0.0,
         )
         pro_hint.add_css_class("hint-label")
@@ -706,16 +707,16 @@ class TranscriptionWindow(Adw.ApplicationWindow):
         try:
             import pro
 
-            pro.ensure_model_installed()
-            error = ""
+            backend = pro.detect_local_backend()
+            GLib.idle_add(self._finish_pro_model_check, backend, "")
         except Exception as exc:
-            error = str(exc)
-        GLib.idle_add(self._finish_pro_model_check, error)
+            GLib.idle_add(self._finish_pro_model_check, None, str(exc))
 
-    def _finish_pro_model_check(self, error: str) -> bool:
+    def _finish_pro_model_check(self, backend: Any, error: str) -> bool:
         self._pro_checking = False
         self._pro_switch.set_sensitive(True)
         if error:
+            self._pro_backend = None
             self._restoring_ui = True
             self._pro_switch.set_active(False)
             self._restoring_ui = False
@@ -723,9 +724,10 @@ class TranscriptionWindow(Adw.ApplicationWindow):
             self._persist_current_config()
             self._show_pro_model_dialog(error)
         else:
+            self._pro_backend = backend
             self._config["pro_enabled"] = True
             self._persist_current_config()
-            self._show_toast("PRO attivo: correzione locale pronta.")
+            self._show_toast(f"PRO attivo: {backend.label}")
         return GLib.SOURCE_REMOVE
 
     def _show_pro_model_dialog(self, error: str) -> None:
@@ -735,8 +737,8 @@ class TranscriptionWindow(Adw.ApplicationWindow):
             self,
             "Modello PRO non disponibile",
             (
-                f"{error}\n\nInstalla Ollama e il modello {pro.MODEL}. "
-                "La guida contiene i passaggi per l'installazione."
+                f"{error}\n\nInstalla o carica un modello locale in Ollama o "
+                "LM Studio. La guida contiene i passaggi per configurarlo."
             ),
         )
         dialog.add_response("close", "Chiudi")
@@ -973,6 +975,10 @@ class TranscriptionWindow(Adw.ApplicationWindow):
                 initial_prompt=initial_prompt,
                 diarization_mode=diarization_mode,
                 pro_enabled=self._pro_switch.get_active(),
+                pro_provider=(
+                    self._pro_backend.provider if self._pro_backend else ""
+                ),
+                pro_model=self._pro_backend.model if self._pro_backend else "",
             )
             for p in valid_files
         ]
