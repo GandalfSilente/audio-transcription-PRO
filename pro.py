@@ -449,7 +449,7 @@ def correct_transcript(
         if check_cancelled:
             check_cancelled()
         if progress:
-            progress(index, len(chunks))
+            progress(index - 1, len(chunks))
         messages = [
             {
                 "role": "system",
@@ -523,6 +523,8 @@ def correct_transcript(
         if not corrected_chunk:
             raise RuntimeError(f"Il modello locale non ha corretto il blocco {index}.")
         corrected.append(corrected_chunk)
+        if progress:
+            progress(index, len(chunks))
         if check_cancelled:
             check_cancelled()
     return "\n\n".join(corrected)

@@ -151,14 +151,17 @@ class ProTests(unittest.TestCase):
                 ).encode()
 
         urlopen.return_value = Response()
+        progress = []
         self.assertEqual(
             pro.correct_transcript(
                 "Testo grezzo.",
                 provider="ollama",
                 context="Lezione di radiologia: risonanza magnetica, parenchima.",
+                progress=lambda completed, total: progress.append((completed, total)),
             ),
             "Testo corretto e leggibile.",
         )
+        self.assertEqual(progress, [(0, 1), (1, 1)])
         request = urlopen.call_args.args[0]
         self.assertEqual(request.full_url, f"{pro.OLLAMA_URL}/api/chat")
         payload = json.loads(request.data)

@@ -187,6 +187,16 @@ button.ready-btn:hover {
     font-weight: 600;
 }
 
+.engine-pill {
+    background-color: #1d3036;
+    color: #9bd5de;
+    border: 1px solid #355a62;
+    border-radius: 999px;
+    padding: 2px 9px;
+    font-size: 11px;
+    font-weight: 700;
+}
+
 .pro-state {
     background-color: #252b37;
     color: #aab5c8;
@@ -536,6 +546,10 @@ class TranscriptionWindow(Adw.ApplicationWindow):
 
         meta_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10)
 
+        self._engine_badge = Gtk.Label(label="")
+        self._engine_badge.add_css_class("engine-pill")
+        self._engine_badge.set_visible(False)
+
         self._status_label = Gtk.Label(
             label="Pronto. Trascina uno o più file audio o video.", xalign=0.0
         )
@@ -550,6 +564,7 @@ class TranscriptionWindow(Adw.ApplicationWindow):
         self._info_label = Gtk.Label(label="", xalign=1.0)
         self._info_label.add_css_class("muted-label")
 
+        meta_row.append(self._engine_badge)
         meta_row.append(self._status_label)
         meta_row.append(self._queue_badge)
         meta_row.append(self._info_label)
@@ -762,6 +777,25 @@ class TranscriptionWindow(Adw.ApplicationWindow):
         if state:
             self._pro_status_label.add_css_class(state)
 
+    def _show_pro_activity(self, message: str) -> None:
+        if self._worker.is_busy():
+            return
+        self._engine_badge.set_text("LLM locale")
+        self._engine_badge.set_visible(True)
+        self._status_label.set_text(message)
+        self._info_label.set_text("Stima: non disponibile in questa fase")
+        self._progress_bar.set_fraction(0.0)
+        self._start_pulse()
+
+    def _finish_pro_activity(self, message: str, detail: str = "") -> None:
+        if self._worker.is_busy():
+            return
+        self._stop_pulse()
+        self._progress_bar.set_fraction(0.0)
+        self._engine_badge.set_visible(False)
+        self._status_label.set_text(message)
+        self._info_label.set_text(detail)
+
     def _on_pro_release_clicked(self, _button: Gtk.Button) -> None:
         if self._pro_checking or self._worker.is_busy():
             self._show_toast("Attendi la fine dell'operazione PRO prima di liberare memoria.")
@@ -769,7 +803,7 @@ class TranscriptionWindow(Adw.ApplicationWindow):
         self._pro_release_btn.set_sensitive(False)
         self._pro_switch.set_sensitive(False)
         self._set_pro_status("● Rilascio memoria…", "busy")
-        self._status_label.set_text("Rilascio memoria del modello PRO...")
+        self._show_pro_activity("LLM locale: rilascio memoria...")
         threading.Thread(target=self._release_pro_model, daemon=True).start()
 
     def _release_pro_model(self) -> None:
@@ -790,6 +824,7 @@ class TranscriptionWindow(Adw.ApplicationWindow):
             self._pro_release_btn.set_sensitive(self._pro_backend is not None)
             self._set_pro_status("● Errore rilascio", "error")
             self._pro_hint.set_text(error)
+            self._finish_pro_activity("LLM locale: errore durante il rilascio.")
             self._show_toast(f"Errore rilascio risorse PRO: {error}")
         else:
             self._pro_backend = None
@@ -797,6 +832,7 @@ class TranscriptionWindow(Adw.ApplicationWindow):
             self._pro_switch.set_active(False)
             self._set_pro_status("● Memoria liberata")
             self._pro_hint.set_text("Riattiva PRO per caricare di nuovo un modello.")
+            self._finish_pro_activity("LLM locale: memoria liberata.")
             self._show_toast(
                 "Memoria liberata e PRO disattivato. Riattiva PRO per usare di nuovo il modello."
             )
@@ -808,7 +844,7 @@ class TranscriptionWindow(Adw.ApplicationWindow):
         self._pro_release_btn.set_sensitive(False)
         self._set_pro_status("● Ricerca modelli…", "busy")
         self._pro_hint.set_text("Ricerca dei modelli chat installati in locale.")
-        self._status_label.set_text("Ricerca modelli locali PRO...")
+        self._show_pro_activity("LLM locale: ricerca modelli installati...")
         threading.Thread(target=self._discover_pro_models, daemon=True).start()
 
     def _discover_pro_models(self) -> None:
@@ -833,6 +869,7 @@ class TranscriptionWindow(Adw.ApplicationWindow):
             self._pro_choices = models
             self._set_pro_status("● Scegli modello", "busy")
             self._pro_hint.set_text(f"Trovati {len(models)} modelli chat locali.")
+            self._finish_pro_activity("Seleziona il modello PRO da caricare.")
             self._show_pro_model_picker(models)
         return GLib.SOURCE_REMOVE
 
@@ -878,6 +915,7 @@ class TranscriptionWindow(Adw.ApplicationWindow):
         self._pro_release_btn.set_sensitive(False)
         self._set_pro_status("● Spento")
         self._pro_hint.set_text("Attiva PRO per cercare i modelli locali installati.")
+        self._finish_pro_activity("PRO disattivato.")
         self._restoring_ui = True
         self._pro_switch.set_active(False)
         self._restoring_ui = False
@@ -900,7 +938,7 @@ class TranscriptionWindow(Adw.ApplicationWindow):
         self._pro_backend = backend
         self._set_pro_status("● Caricamento…", "busy")
         self._pro_hint.set_text(backend.label)
-        self._status_label.set_text(f"Avvio modello PRO: {backend.label}...")
+        self._show_pro_activity(f"LLM locale: caricamento {backend.label}...")
         threading.Thread(
             target=self._load_pro_model, args=(backend,), daemon=True
         ).start()
@@ -940,6 +978,7 @@ class TranscriptionWindow(Adw.ApplicationWindow):
             self._restoring_ui = False
             self._config["pro_enabled"] = False
             self._persist_current_config()
+            self._finish_pro_activity("LLM locale: caricamento non riuscito.")
             self._show_pro_model_dialog(error)
             self._enqueue_pending_pro_paths()
         else:
@@ -951,6 +990,9 @@ class TranscriptionWindow(Adw.ApplicationWindow):
             )
             self._config["pro_enabled"] = True
             self._persist_current_config()
+            self._finish_pro_activity(
+                f"LLM locale pronto: {backend.label}", "Modello caricato"
+            )
             self._show_toast(f"PRO attivo: {backend.label}")
             self._enqueue_pending_pro_paths()
         return GLib.SOURCE_REMOVE
@@ -1242,6 +1284,13 @@ class TranscriptionWindow(Adw.ApplicationWindow):
         self._last_state = snap
         status = snap.get("status", "idle")
         progress = float(snap.get("progress", 0.0))
+
+        engine_name = str(snap.get("engine", ""))
+        self._engine_badge.set_text(engine_name)
+        self._engine_badge.set_visible(
+            bool(engine_name)
+            and status in ("loading", "transcribing", "pro", "error")
+        )
         queue_size = int(snap.get("queue_size", 0))
 
         self._status_label.set_text(snap.get("message", ""))
@@ -1254,12 +1303,12 @@ class TranscriptionWindow(Adw.ApplicationWindow):
             self._queue_badge.set_visible(False)
 
         # Progress bar and timers
-        if status in ("loading", "pro"):
+        if status == "loading" or (status == "pro" and progress <= 0):
             self._start_pulse()
             self._start_elapsed_timer()
             self._cancel_btn.set_visible(True)
             self._cancel_btn.set_sensitive(True)
-        elif status == "transcribing":
+        elif status in ("transcribing", "pro"):
             self._stop_pulse()
             self._progress_bar.set_fraction(max(0.0, min(1.0, progress / 100.0)))
             self._start_elapsed_timer()
@@ -1328,7 +1377,7 @@ class TranscriptionWindow(Adw.ApplicationWindow):
         parts: list[str] = []
         status = snap.get("status", "idle")
         progress = float(snap.get("progress", 0.0))
-        if status == "transcribing":
+        if status == "transcribing" or (status == "pro" and progress > 0):
             parts.append(f"{progress:.0f}%")
         if snap.get("language"):
             parts.append(f"Lingua: {snap['language']}")
@@ -1343,6 +1392,20 @@ class TranscriptionWindow(Adw.ApplicationWindow):
             elapsed = float(snap.get("elapsed", 0.0))
         if elapsed > 0:
             parts.append(f"Tempo: {elapsed:.1f}s")
+
+        progress_started_at = float(snap.get("progress_started_at") or 0.0)
+        if status in ("loading", "transcribing", "pro"):
+            if status == "loading" or (
+                status == "pro" and progress_started_at <= 0
+            ):
+                parts.append("Stima: non disponibile in questa fase")
+            elif progress < 5:
+                parts.append("Stima: in calcolo")
+            elif progress < 100:
+                estimate_started_at = progress_started_at or started_at
+                estimate_elapsed = max(0.0, time.time() - estimate_started_at)
+                remaining = round(estimate_elapsed * (100.0 - progress) / progress)
+                parts.append(f"Stima: ~{engine.format_short(remaining)}")
 
         self._info_label.set_text(" • ".join(parts))
 
@@ -1370,7 +1433,7 @@ class TranscriptionWindow(Adw.ApplicationWindow):
             self._timer_source_id = None
 
     def _on_elapsed_tick(self) -> bool:
-        if self._last_state.get("status") not in ("loading", "transcribing"):
+        if self._last_state.get("status") not in ("loading", "transcribing", "pro"):
             self._timer_source_id = None
             return GLib.SOURCE_REMOVE
         self._update_info_label(self._last_state)
