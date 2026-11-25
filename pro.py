@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import shutil
 import subprocess
+import threading
 import time
 import urllib.error
 import urllib.request
@@ -24,6 +25,7 @@ class LocalBackend:
     provider: str
     model: str
     label: str
+    size_bytes: int = 0
 
 
 class ModelUnavailable(RuntimeError):
@@ -63,16 +65,16 @@ def _lmstudio_disk_models() -> list[dict]:
     return [
         model
         for model in models
-        if isinstance(model, dict) and model.get("type") == "llm"
+        if isinstance(model, dict) and model.get("type") in ("llm", "vlm")
     ]
 
 
-def _run_lms(*args: str, timeout: int) -> None:
+def _run_lms(*args: str, timeout: int) -> str:
     executable = shutil.which("lms")
     if not executable:
         raise ModelUnavailable(
-            "LM Studio CLI `lms` non trovato. Avvia LM Studio e installa il "
-            "comando CLI dalle impostazioni dell'app."
+            "LM Studio CLI `lms` non trovato. Abilita il comando CLI nelle "
+            "impostazioni di LM Studio oppure installa llmster headless."
         )
     try:
         result = subprocess.run(
@@ -92,12 +94,13 @@ def _run_lms(*args: str, timeout: int) -> None:
             f"Comando LM Studio fallito (`lms {' '.join(args)}`): "
             f"{detail or f'codice {result.returncode}'}"
         )
+    return "\n".join(part for part in (result.stdout, result.stderr) if part).strip()
 
 
 def _lmstudio_server_available() -> bool:
     return (
-        _read_json(f"{LM_STUDIO_URL}/api/v0/models") is not None
-        or _read_json(f"{LM_STUDIO_URL}/v1/models") is not None
+        _read_json(f"{LM_STUDIO_URL}/api/v0/models", timeout=0.5) is not None
+        or _read_json(f"{LM_STUDIO_URL}/v1/models", timeout=0.5) is not None
     )
 
 
@@ -109,147 +112,306 @@ def _is_text_model(model: dict) -> bool:
     return model.get("type") in ("llm", "vlm")
 
 
-def _preferred(models: list[dict]) -> dict:
-    def rank(model: dict) -> tuple[int, int, int]:
-        name = f"{_model_key(model)} {model.get('displayName', '')}".lower()
-        is_qwen7 = "qwen" in name and "7b" in name
-        is_qwen = "qwen" in name
-        size = int(model.get("sizeBytes") or 0)
-        return (0 if is_qwen7 else 1, 0 if is_qwen else 1, size)
-
-    return min(models, key=rank)
+def _display_size(size_bytes: int) -> str:
+    if size_bytes <= 0:
+        return "dimensione sconosciuta"
+    return f"{size_bytes / (1024 ** 3):.1f} GiB"
 
 
-def _ollama_backend() -> LocalBackend | None:
-    data = _read_json(f"{OLLAMA_URL}/api/tags")
-    models = data.get("models") if data else None
-    if not isinstance(models, list):
-        return None
-    candidates = [
-        model
-        for model in models
-        if isinstance(model, dict)
-        and (model.get("name") or model.get("model"))
-        and "embed" not in str(model.get("name", "")).lower()
-    ]
-    if not candidates:
-        return None
-    exact = next(
-        (
-            model
-            for model in candidates
-            if (model.get("name") or model.get("model")) == OLLAMA_MODEL
-        ),
-        None,
+def _local_api_post(url: str, payload: dict, timeout: float = 600) -> dict:
+    request = urllib.request.Request(
+        url,
+        data=json.dumps(payload).encode("utf-8"),
+        headers={"Content-Type": "application/json"},
+        method="POST",
     )
-    selected = exact or _preferred(
-        [
-            {
-                "id": model.get("name") or model.get("model"),
-                "displayName": model.get("name") or model.get("model"),
-                "sizeBytes": model.get("size", 0),
-            }
-            for model in candidates
-        ]
-    )
-    model_id = str(
-        selected.get("id") or selected.get("modelKey") or selected.get("name") or ""
-    )
-    return LocalBackend("ollama", model_id, f"Ollama • {model_id}")
-
-
-def detect_local_backend() -> LocalBackend:
-    lmstudio = _read_json(f"{LM_STUDIO_URL}/api/v0/models")
-    if lmstudio is None:
-        lmstudio = _read_json(f"{LM_STUDIO_URL}/v1/models")
-        if lmstudio and isinstance(lmstudio.get("data"), list):
-            lmstudio = {
-                **lmstudio,
-                "data": [
-                    {
-                        **model,
-                        "type": model.get("type") or "llm",
-                        "state": model.get("state") or "loaded",
-                    }
-                    for model in lmstudio["data"]
-                    if isinstance(model, dict)
-                ],
-            }
-    if lmstudio is not None and isinstance(lmstudio.get("data"), list):
-        models = [model for model in lmstudio["data"] if isinstance(model, dict)]
-        loaded = [
-            model
-            for model in models
-            if _is_text_model(model)
-            and model.get("state", "loaded") == "loaded"
-        ]
-        if loaded:
-            model = _preferred(loaded)
-            model_id = _model_key(model)
-            return LocalBackend("lmstudio", model_id, f"LM Studio • {model_id}")
-
-    ollama_backend = _ollama_backend()
-    if ollama_backend:
-        return ollama_backend
-
-    installed = (
-        [model for model in lmstudio["data"] if _is_text_model(model)]
-        if lmstudio and isinstance(lmstudio.get("data"), list)
-        else []
-    )
-    if not installed:
-        installed = _lmstudio_disk_models()
-    if installed:
-        model = _preferred(installed)
-        model_id = _model_key(model)
+    try:
+        with urllib.request.urlopen(request, timeout=timeout) as response:
+            data = json.loads(response.read().decode("utf-8"))
+    except urllib.error.HTTPError as error:
+        detail = error.read().decode("utf-8", errors="replace").strip()
         raise ModelUnavailable(
-            f"LM Studio ha trovato {model_id}, ma il modello non è caricato. "
-            "Caricalo in LM Studio e avvia il Local Server, poi riattiva PRO."
+            f"Errore API locale ({error.code}): {detail or error.reason}"
+        ) from error
+    except (OSError, urllib.error.URLError, json.JSONDecodeError) as error:
+        raise ModelUnavailable(f"Errore API locale: {error}") from error
+    if not isinstance(data, dict):
+        raise ModelUnavailable("Il server locale ha restituito una risposta non valida.")
+    return data
+
+
+class LocalModelManager:
+    def __init__(self) -> None:
+        self._lock = threading.RLock()
+        self._ollama_process: subprocess.Popen[bytes] | None = None
+        self._started_lmstudio_daemon = False
+        self._selected_backend: LocalBackend | None = None
+
+    def _ollama_server(self) -> dict | None:
+        data = _read_json(f"{OLLAMA_URL}/api/tags", timeout=0.5)
+        if data is not None:
+            return data
+        executable = shutil.which("ollama")
+        if not executable:
+            return None
+        try:
+            self._ollama_process = subprocess.Popen(
+                [executable, "serve"],
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                start_new_session=True,
+            )
+        except OSError as error:
+            raise ModelUnavailable(f"Impossibile avviare Ollama in background: {error}") from error
+        for _ in range(40):
+            data = _read_json(f"{OLLAMA_URL}/api/tags", timeout=0.5)
+            if data is not None:
+                return data
+            if self._ollama_process.poll() is not None:
+                break
+            time.sleep(0.25)
+        self._stop_ollama_process()
+        raise ModelUnavailable(
+            "Ollama è installato ma il servizio locale non si è avviato."
         )
 
-    raise ModelUnavailable(
-        "Nessun modello locale trovato. Installa un modello con Ollama oppure "
-        "scaricane uno in LM Studio, caricalo e avvia il Local Server."
-    )
+    def discover_models(self) -> list[LocalBackend]:
+        with self._lock:
+            models = [
+                LocalBackend(
+                    "lmstudio",
+                    _model_key(model),
+                    f"LM Studio — {model.get('displayName') or _model_key(model)} "
+                    f"({_display_size(int(model.get('sizeBytes') or 0))})",
+                    int(model.get("sizeBytes") or 0),
+                )
+                for model in _lmstudio_disk_models()
+                if _is_text_model(model)
+                if _model_key(model)
+            ]
+            lmstudio_data = _read_json(
+                f"{LM_STUDIO_URL}/api/v0/models", timeout=0.5
+            )
+            if lmstudio_data is None:
+                lmstudio_data = _read_json(f"{LM_STUDIO_URL}/v1/models", timeout=0.5)
+            if not models and lmstudio_data and isinstance(lmstudio_data.get("data"), list):
+                models.extend(
+                    LocalBackend(
+                        "lmstudio",
+                        _model_key(model),
+                        f"LM Studio — {model.get('displayName') or _model_key(model)}",
+                        int(model.get("sizeBytes") or 0),
+                    )
+                    for model in lmstudio_data["data"]
+                    if isinstance(model, dict)
+                    and (
+                        _is_text_model(model)
+                        or (
+                            model.get("object") == "model"
+                            and "embed" not in _model_key(model).lower()
+                        )
+                    )
+                    and _model_key(model)
+                )
 
+            ollama_error = ""
+            try:
+                data = self._ollama_server()
+                ollama_models = data.get("models", []) if data else []
+                if isinstance(ollama_models, list):
+                    models.extend(
+                        LocalBackend(
+                            "ollama",
+                            str(model.get("name") or model.get("model")),
+                            f"Ollama — {model.get('name') or model.get('model')} "
+                            f"({_display_size(int(model.get('size') or 0))})",
+                            int(model.get("size") or 0),
+                        )
+                        for model in ollama_models
+                        if isinstance(model, dict)
+                        and (model.get("name") or model.get("model"))
+                        and "embed"
+                        not in str(model.get("name") or model.get("model")).lower()
+                    )
+            except ModelUnavailable as error:
+                ollama_error = str(error)
 
-def ensure_local_backend(
-    progress: Callable[[str], None] | None = None,
-) -> LocalBackend:
-    try:
-        return detect_local_backend()
-    except ModelUnavailable:
-        models = _lmstudio_disk_models()
-        if not models:
-            raise
+            if not models:
+                self._stop_ollama_process()
+                raise ModelUnavailable(
+                    ollama_error
+                    or "Nessun modello chat installato in LM Studio o Ollama."
+                )
+            return sorted(models, key=lambda model: (model.size_bytes or 2**63, model.label))
 
-    model = _preferred(models)
-    model_key = _model_key(model)
-    if not model_key:
-        raise ModelUnavailable("LM Studio non ha restituito un identificativo modello.")
-
-    if not _lmstudio_server_available():
-        if progress:
-            progress("Avvio automatico del Local Server di LM Studio...")
+    def _ensure_lmstudio_server(self) -> None:
+        if _lmstudio_server_available():
+            return
+        status = _run_lms("daemon", "status", timeout=10).lower()
+        if "not running" in status:
+            _run_lms("daemon", "up", timeout=60)
+            self._started_lmstudio_daemon = True
         _run_lms("server", "start", timeout=30)
+        for _ in range(40):
+            if _lmstudio_server_available():
+                return
+            time.sleep(0.25)
+        raise ModelUnavailable("Il server headless di LM Studio non risponde.")
 
-    if progress:
-        progress(f"Caricamento automatico del modello {model_key}...")
-    _run_lms("load", model_key, "--yes", "--auto", timeout=600)
+    def _ensure_ollama_server(self) -> None:
+        if _read_json(f"{OLLAMA_URL}/api/tags", timeout=0.5) is None:
+            data = self._ollama_server()
+            if data is None:
+                raise ModelUnavailable("Il server locale di Ollama non è disponibile.")
 
-    for _ in range(30):
-        try:
-            backend = detect_local_backend()
+    def _backend_is_loaded(self, backend: LocalBackend) -> bool:
+        if backend.provider == "lmstudio":
+            data = _read_json(f"{LM_STUDIO_URL}/api/v0/models", timeout=2)
+            models = data.get("data", []) if data else []
+            return any(
+                isinstance(model, dict)
+                and _model_key(model) == backend.model
+                and model.get("state") == "loaded"
+                for model in models
+            )
+        if backend.provider == "ollama":
+            data = _read_json(f"{OLLAMA_URL}/api/ps", timeout=2)
+            models = data.get("models", []) if data else []
+            return any(
+                isinstance(model, dict)
+                and (model.get("name") or model.get("model")) == backend.model
+                for model in models
+            )
+        return False
+
+    def load_backend(
+        self,
+        backend: LocalBackend,
+        progress: Callable[[str], None] | None = None,
+    ) -> None:
+        with self._lock:
+            if backend.provider not in ("lmstudio", "ollama"):
+                raise ModelUnavailable(f"Provider locale non supportato: {backend.provider}")
+            self._selected_backend = backend
             if backend.provider == "lmstudio":
-                return backend
-        except ModelUnavailable:
-            pass
-        time.sleep(1)
+                self._stop_ollama_process()
+                self._ensure_lmstudio_server()
+                if not self._backend_is_loaded(backend):
+                    if progress:
+                        progress(f"Caricamento {backend.label}...")
+                    _run_lms("load", backend.model, "--yes", "--auto", timeout=600)
+                    for _ in range(40):
+                        if self._backend_is_loaded(backend):
+                            break
+                        time.sleep(0.25)
+                    else:
+                        raise ModelUnavailable(
+                            f"LM Studio non ha confermato il caricamento di {backend.model}."
+                        )
+            elif backend.provider == "ollama":
+                self._ensure_ollama_server()
+                if not self._backend_is_loaded(backend):
+                    if progress:
+                        progress(f"Caricamento {backend.label}...")
+                    _local_api_post(
+                        f"{OLLAMA_URL}/api/generate",
+                        {
+                            "model": backend.model,
+                            "prompt": " ",
+                            "stream": False,
+                            "keep_alive": -1,
+                            "options": {"num_predict": 1},
+                        },
+                    )
+    def _stop_ollama_process(self) -> None:
+        process = self._ollama_process
+        if process is not None:
+            if process.poll() is None:
+                try:
+                    process.terminate()
+                except ProcessLookupError:
+                    pass
+            try:
+                if process.poll() is None:
+                    process.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                process.kill()
+                process.wait(timeout=5)
+            self._ollama_process = None
 
-    raise ModelUnavailable(
-        f"LM Studio non ha confermato il caricamento di {model_key}. "
-        "Controlla lo stato del modello e riprova."
-    )
+    def release(self) -> None:
+        errors: list[str] = []
+        with self._lock:
+            backend = self._selected_backend
+            if backend is not None:
+                try:
+                    if self._backend_is_loaded(backend):
+                        if backend.provider == "lmstudio":
+                            _run_lms("unload", backend.model, timeout=60)
+                        elif backend.provider == "ollama":
+                            executable = shutil.which("ollama")
+                            if executable:
+                                result = subprocess.run(
+                                    [executable, "stop", backend.model],
+                                    capture_output=True,
+                                    text=True,
+                                    timeout=60,
+                                    check=False,
+                                )
+                                if result.returncode:
+                                    raise ModelUnavailable(
+                                        result.stderr.strip() or "Ollama non ha scaricato il modello."
+                                    )
+                except (OSError, subprocess.TimeoutExpired, ModelUnavailable) as error:
+                    errors.append(str(error))
+                finally:
+                    self._selected_backend = None
+
+            if self._started_lmstudio_daemon:
+                if _lmstudio_server_available():
+                    try:
+                        _run_lms("server", "stop", timeout=30)
+                    except ModelUnavailable as error:
+                        errors.append(str(error))
+                try:
+                    _run_lms("daemon", "down", timeout=30)
+                except ModelUnavailable as error:
+                    errors.append(str(error))
+                else:
+                    self._started_lmstudio_daemon = False
+            try:
+                self._stop_ollama_process()
+            except (OSError, subprocess.TimeoutExpired) as error:
+                errors.append(str(error))
+        if errors:
+            raise ModelUnavailable("Impossibile liberare tutte le risorse PRO: " + "; ".join(errors))
+
+
+_LOCAL_MODELS = LocalModelManager()
+
+
+def discover_local_models() -> list[LocalBackend]:
+    return _LOCAL_MODELS.discover_models()
+
+
+def load_local_model(
+    backend: LocalBackend,
+    progress: Callable[[str], None] | None = None,
+) -> None:
+    _LOCAL_MODELS.load_backend(backend, progress)
+
+
+def ensure_local_model(
+    provider: str,
+    model: str,
+    progress: Callable[[str], None] | None = None,
+) -> None:
+    load_local_model(LocalBackend(provider, model, f"{provider} — {model}"), progress)
+
+
+def release_local_model() -> None:
+    _LOCAL_MODELS.release()
 
 
 def split_text(text: str, max_chars: int = 4500) -> list[str]:

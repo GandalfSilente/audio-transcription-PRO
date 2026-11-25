@@ -4,102 +4,137 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import ANY, patch
 
 import pro
 import engine
 
 
 class ProTests(unittest.TestCase):
-    @patch("pro._ollama_backend", return_value=None)
-    @patch(
-        "pro._read_json",
-        return_value={
-            "data": [
-                {
-                    "id": "qwen2.5-coder-7b-instruct-abliterated",
-                    "type": "llm",
-                    "state": "loaded",
-                }
-            ]
-        },
-    )
-    def test_detects_loaded_lmstudio_model(self, _read_json, _ollama) -> None:
-        backend = pro.detect_local_backend()
-        self.assertEqual(backend.provider, "lmstudio")
-        self.assertEqual(backend.model, "qwen2.5-coder-7b-instruct-abliterated")
-
-    @patch("pro._ollama_backend", return_value=None)
-    @patch(
-        "pro._read_json",
-        side_effect=[
-            None,
-            {"data": [{"id": "lmstudio-chat-model", "object": "model"}]},
-        ],
-    )
-    def test_detects_loaded_lmstudio_openai_api_model(
-        self, _read_json, _ollama
-    ) -> None:
-        backend = pro.detect_local_backend()
-        self.assertEqual(backend.provider, "lmstudio")
-        self.assertEqual(backend.model, "lmstudio-chat-model")
-
-    @patch("pro._ollama_backend", return_value=None)
-    @patch("pro._lmstudio_disk_models")
-    @patch("pro._read_json", return_value=None)
-    def test_installed_lmstudio_model_requires_load_and_server(
-        self, _read_json, disk_models, _ollama
-    ) -> None:
-        disk_models.return_value = [
-            {
-                "modelKey": "qwen2.5-coder-7b-instruct-abliterated",
-                "displayName": "Qwen 7B",
-                "type": "llm",
-            }
-        ]
-        with self.assertRaisesRegex(pro.ModelUnavailable, "qwen2.5-coder-7b"):
-            pro.detect_local_backend()
-
-    @patch("pro.detect_local_backend")
-    @patch("pro._lmstudio_disk_models")
-    @patch("pro._lmstudio_server_available", return_value=False)
     @patch("pro._run_lms")
-    def test_pro_switch_starts_server_and_loads_installed_model(
-        self, run_lms, _server, disk_models, detect
+    @patch("pro._lmstudio_server_available", side_effect=[False, True])
+    def test_load_starts_headless_lmstudio_and_loads_model(
+        self, _server, run_lms
     ) -> None:
-        backend = pro.LocalBackend(
-            "lmstudio", "qwen2.5-coder-7b", "LM Studio • qwen2.5-coder-7b"
+        manager = pro.LocalModelManager()
+        backend = pro.LocalBackend("lmstudio", "qwen7b", "LM Studio — Qwen 7B")
+        run_lms.side_effect = ["LM Studio is not running", "", "", ""]
+        with patch.object(manager, "_backend_is_loaded", side_effect=[False, True]):
+            manager.load_backend(backend)
+        self.assertEqual(
+            [call.args for call in run_lms.call_args_list],
+            [
+                ("daemon", "status"),
+                ("daemon", "up"),
+                ("server", "start"),
+                ("load", "qwen7b", "--yes", "--auto"),
+            ],
         )
-        detect.side_effect = [
-            pro.ModelUnavailable("Model is not loaded"),
-            backend,
-        ]
+
+    @patch("pro._lmstudio_disk_models")
+    def test_discovery_lists_all_chat_models_and_excludes_embeddings(
+        self, disk_models
+    ) -> None:
+        manager = pro.LocalModelManager()
         disk_models.return_value = [
-            {
-                "modelKey": "qwen2.5-coder-7b",
-                "displayName": "Qwen 7B",
-                "type": "llm",
-            }
+            {"modelKey": "qwen7b", "displayName": "Qwen 7B", "type": "llm", "sizeBytes": 5},
+            {"modelKey": "embedding", "type": "embedding", "sizeBytes": 1},
+            {"modelKey": "qwen30b", "displayName": "Qwen 30B", "type": "llm", "sizeBytes": 30},
         ]
-        progress = []
+        with patch.object(manager, "_ollama_server", return_value={"models": []}):
+            models = manager.discover_models()
+        self.assertEqual([model.model for model in models], ["qwen7b", "qwen30b"])
 
-        self.assertEqual(pro.ensure_local_backend(progress.append), backend)
-        self.assertEqual(run_lms.call_args_list[0].args, ("server", "start"))
-        self.assertEqual(run_lms.call_args_list[1].args, (
-            "load", "qwen2.5-coder-7b", "--yes", "--auto"
-        ))
-        self.assertTrue(any("Caricamento automatico" in message for message in progress))
-
+    @patch("pro._lmstudio_disk_models", return_value=[])
     @patch("pro._read_json")
-    def test_uses_installed_ollama_model_when_available(self, read_json) -> None:
+    def test_discovery_uses_lmstudio_api_when_cli_list_is_empty(
+        self, read_json, _disk_models
+    ) -> None:
         read_json.side_effect = [
             None,
-            None,
-            {"models": [{"name": "qwen3:8b", "model": "qwen3:8b"}]},
+            {
+                "data": [
+                    {"id": "chat-model", "object": "model"},
+                    {"id": "text-embedding-model", "object": "model"},
+                ]
+            },
         ]
-        backend = pro.detect_local_backend()
-        self.assertEqual(backend.provider, "ollama")
-        self.assertEqual(backend.model, "qwen3:8b")
+        manager = pro.LocalModelManager()
+        with patch.object(manager, "_ollama_server", return_value={"models": []}):
+            models = manager.discover_models()
+        self.assertEqual([model.model for model in models], ["chat-model"])
+
+    @patch("pro._lmstudio_disk_models", return_value=[])
+    @patch("pro._read_json", return_value=None)
+    def test_discovery_includes_ollama_models_and_filters_embeddings(
+        self, _read_json, _disk_models
+    ) -> None:
+        manager = pro.LocalModelManager()
+        with patch.object(
+            manager,
+            "_ollama_server",
+            return_value={
+                "models": [
+                    {"name": "qwen3:8b", "size": 8},
+                    {"name": "nomic-embed-text", "size": 1},
+                ]
+            },
+        ):
+            models = manager.discover_models()
+        self.assertEqual([model.model for model in models], ["qwen3:8b"])
+
+    @patch("pro._local_api_post")
+    @patch("pro._read_json")
+    def test_load_warms_ollama_model_in_background(self, read_json, post) -> None:
+        read_json.side_effect = lambda url, timeout=3.0: (
+            {"models": []} if url.endswith("/api/tags") else {"models": []}
+        )
+        manager = pro.LocalModelManager()
+        backend = pro.LocalBackend("ollama", "qwen3:8b", "Ollama — qwen3:8b")
+        with patch.object(manager, "_backend_is_loaded", return_value=False):
+            manager.load_backend(backend)
+        self.assertEqual(post.call_args.args[0], f"{pro.OLLAMA_URL}/api/generate")
+        self.assertEqual(post.call_args.args[1]["keep_alive"], -1)
+
+    @patch("pro._run_lms")
+    def test_release_unloads_selected_model_and_stops_owned_daemon(
+        self, run_lms
+    ) -> None:
+        manager = pro.LocalModelManager()
+        manager._selected_backend = pro.LocalBackend(
+            "lmstudio", "qwen7b", "LM Studio — Qwen 7B"
+        )
+        manager._started_lmstudio_daemon = True
+        with (
+            patch.object(manager, "_backend_is_loaded", return_value=True),
+            patch("pro._lmstudio_server_available", return_value=True),
+        ):
+            manager.release()
+        self.assertEqual(
+            [call.args for call in run_lms.call_args_list],
+            [
+                ("unload", "qwen7b"),
+                ("server", "stop"),
+                ("daemon", "down"),
+            ],
+        )
+
+    @patch("pro.subprocess.run")
+    @patch("pro.shutil.which", return_value="/usr/bin/ollama")
+    def test_release_unloads_selected_ollama_model(
+        self, _which, run_process
+    ) -> None:
+        manager = pro.LocalModelManager()
+        manager._selected_backend = pro.LocalBackend(
+            "ollama", "qwen3:8b", "Ollama — qwen3:8b"
+        )
+        run_process.return_value.returncode = 0
+        with patch.object(manager, "_backend_is_loaded", return_value=True):
+            manager.release()
+        self.assertEqual(
+            run_process.call_args.args[0],
+            ["/usr/bin/ollama", "stop", "qwen3:8b"],
+        )
 
     @patch("pro.urllib.request.urlopen")
     def test_correction_uses_local_chat_and_preserves_output(self, urlopen) -> None:
@@ -183,9 +218,10 @@ class ProTests(unittest.TestCase):
         self.assertEqual(" ".join(chunks), text)
         self.assertTrue(all(len(chunk) <= 9 for chunk in chunks))
 
+    @patch("pro.ensure_local_model")
     @patch("pro.correct_transcript", return_value="Polished transcript.")
     def test_engine_pro_stage_keeps_original_and_saves_new_output(
-        self, _correct
+        self, _correct, _ensure
     ) -> None:
         with tempfile.TemporaryDirectory() as directory:
             raw_path = Path(directory) / "lecture.txt"
@@ -213,12 +249,18 @@ class ProTests(unittest.TestCase):
                 _correct.call_args.kwargs["model"],
                 "qwen2.5-coder-7b-instruct-abliterated",
             )
+            _ensure.assert_called_once_with(
+                "lmstudio",
+                "qwen2.5-coder-7b-instruct-abliterated",
+                progress=ANY,
+            )
 
+    @patch("pro.ensure_local_model")
     @patch(
         "pro.correct_transcript",
         side_effect=pro.ModelUnavailable("No local model is loaded"),
     )
-    def test_pro_failure_keeps_original_available(self, _correct) -> None:
+    def test_pro_failure_keeps_original_available(self, _correct, _ensure) -> None:
         with tempfile.TemporaryDirectory() as directory:
             raw_path = Path(directory) / "lecture.txt"
             raw_path.write_text("Rough transcript.", encoding="utf-8")

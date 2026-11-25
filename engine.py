@@ -1105,6 +1105,14 @@ class TranscriptionWorker:
                     message=f"PRO: correzione blocco {index}/{total}...",
                 )
 
+            self._check_cancelled()
+            pro.ensure_local_model(
+                job.pro_provider,
+                job.pro_model,
+                progress=lambda message: self._update_state(
+                    status="pro", message=f"PRO: {message}"
+                ),
+            )
             corrected = pro.correct_transcript(
                 raw_text,
                 progress=report_progress,

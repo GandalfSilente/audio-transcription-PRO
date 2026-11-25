@@ -218,6 +218,10 @@ class TranscriptionWindow(Adw.ApplicationWindow):
         self._save_prompt_source_id: int | None = None
         self._pro_checking = False
         self._pro_backend: Any = None
+        self._pro_choices: list[Any] = []
+        self._pending_pro_paths: list[Path] = []
+        self._pro_cleanup_pending = False
+        self._pro_cleanup_done = False
 
         self._worker = engine.TranscriptionWorker(self._on_worker_update)
         self._live_transcriber: Any = None
@@ -342,8 +346,8 @@ class TranscriptionWindow(Adw.ApplicationWindow):
         pro_info.append(pro_heading)
         pro_hint = Gtk.Label(
             label=(
-                "LM Studio avvia automaticamente server e modello installato; "
-                "Ollama richiede il servizio attivo."
+                "LM Studio e Ollama avviano i servizi in background; se trovi "
+                "più modelli puoi scegliere quale usare."
             ),
             xalign=0.0,
         )
@@ -351,6 +355,13 @@ class TranscriptionWindow(Adw.ApplicationWindow):
         pro_info.append(pro_hint)
         pro_info.set_hexpand(True)
         pro_row.append(pro_info)
+        self._pro_release_btn = Gtk.Button(label="Libera memoria")
+        self._pro_release_btn.set_sensitive(False)
+        self._pro_release_btn.set_tooltip_text(
+            "Scarica il modello PRO dalla memoria; verrà ricaricato al prossimo audio"
+        )
+        self._pro_release_btn.connect("clicked", self._on_pro_release_clicked)
+        pro_row.append(self._pro_release_btn)
         self._pro_switch = Gtk.Switch()
         self._pro_switch.set_valign(Gtk.Align.CENTER)
         self._pro_switch.set_tooltip_text(
@@ -700,42 +711,181 @@ class TranscriptionWindow(Adw.ApplicationWindow):
             self._config["pro_enabled"] = False
             self._persist_current_config()
 
-    def _check_pro_model_async(self) -> None:
-        self._pro_checking = True
-        self._pro_switch.set_sensitive(False)
-        self._status_label.set_text("Verifica e avvio automatico del modello PRO...")
-        threading.Thread(target=self._check_pro_model, daemon=True).start()
+    def _on_pro_release_clicked(self, _button: Gtk.Button) -> None:
+        if self._pro_checking or self._worker.is_busy():
+            self._show_toast("Attendi la fine dell'operazione PRO prima di liberare memoria.")
+            return
+        self._pro_release_btn.set_sensitive(False)
+        self._status_label.set_text("Rilascio memoria del modello PRO...")
+        threading.Thread(target=self._release_pro_model, daemon=True).start()
 
-    def _check_pro_model(self) -> None:
+    def _release_pro_model(self) -> None:
+        error = ""
         try:
             import pro
 
-            backend = pro.ensure_local_backend(
+            pro.release_local_model()
+        except Exception as exc:
+            error = str(exc)
+        GLib.idle_add(self._finish_pro_release, error)
+
+    def _finish_pro_release(self, error: str) -> bool:
+        if self._pro_cleanup_pending or self._pro_cleanup_done:
+            return GLib.SOURCE_REMOVE
+        self._pro_release_btn.set_sensitive(self._pro_backend is not None)
+        if error:
+            self._show_toast(f"Errore rilascio risorse PRO: {error}")
+        else:
+            self._show_toast(
+                "Memoria PRO liberata; il modello verrà ricaricato al prossimo audio."
+            )
+        return GLib.SOURCE_REMOVE
+
+    def _check_pro_model_async(self) -> None:
+        self._pro_checking = True
+        self._pro_switch.set_sensitive(False)
+        self._pro_release_btn.set_sensitive(False)
+        self._status_label.set_text("Ricerca modelli locali PRO...")
+        threading.Thread(target=self._discover_pro_models, daemon=True).start()
+
+    def _discover_pro_models(self) -> None:
+        try:
+            import pro
+
+            models = pro.discover_local_models()
+            GLib.idle_add(self._finish_pro_discovery, models, "")
+        except Exception as exc:
+            GLib.idle_add(self._finish_pro_discovery, [], str(exc))
+
+    def _finish_pro_discovery(self, models: list[Any], error: str) -> bool:
+        if self._pro_cleanup_pending or self._pro_cleanup_done:
+            return GLib.SOURCE_REMOVE
+        if error:
+            self._finish_pro_model_check(None, error)
+        elif not models:
+            self._finish_pro_model_check(None, "Nessun modello chat locale trovato.")
+        elif len(models) == 1:
+            self._start_pro_model_async(models[0])
+        else:
+            self._pro_choices = models
+            self._show_pro_model_picker(models)
+        return GLib.SOURCE_REMOVE
+
+    def _show_pro_model_picker(self, models: list[Any]) -> None:
+        dialog = Adw.MessageDialog.new(
+            self,
+            "Scegli modello PRO",
+            "Sono installati più modelli locali. Seleziona quello da usare:",
+        )
+        dropdown = Gtk.DropDown.new_from_strings([model.label for model in models])
+        dropdown.set_selected(0)
+        dropdown.set_hexpand(True)
+        dialog.set_extra_child(dropdown)
+        dialog.add_response("select", "Usa modello")
+        dialog.add_response("cancel", "Annulla")
+        dialog.set_default_response("select")
+        dialog.set_close_response("cancel")
+        dialog.set_response_appearance("select", Adw.ResponseAppearance.SUGGESTED)
+        dialog.connect("response", self._on_pro_model_choice, dropdown)
+        dialog.present()
+
+    def _on_pro_model_choice(
+        self, _dialog: Adw.MessageDialog, response: str, dropdown: Gtk.DropDown
+    ) -> None:
+        if self._pro_cleanup_pending or self._pro_cleanup_done:
+            return
+        if response == "cancel":
+            self._cancel_pro_activation()
+            return
+        index = dropdown.get_selected()
+        if not 0 <= index < len(self._pro_choices):
+            self._cancel_pro_activation()
+            return
+        model = self._pro_choices[index]
+        self._pro_choices = []
+        self._start_pro_model_async(model)
+
+    def _cancel_pro_activation(self) -> None:
+        self._pro_checking = False
+        self._pro_backend = None
+        self._pro_choices = []
+        self._pro_switch.set_sensitive(True)
+        self._pro_release_btn.set_sensitive(False)
+        self._restoring_ui = True
+        self._pro_switch.set_active(False)
+        self._restoring_ui = False
+        self._config["pro_enabled"] = False
+        self._persist_current_config()
+        threading.Thread(
+            target=self._release_discovered_pro_resources, daemon=True
+        ).start()
+        self._enqueue_pending_pro_paths()
+
+    def _release_discovered_pro_resources(self) -> None:
+        try:
+            import pro
+
+            pro.release_local_model()
+        except Exception as exc:
+            GLib.idle_add(self._show_toast, f"Errore rilascio risorse PRO: {exc}")
+
+    def _start_pro_model_async(self, backend: Any) -> None:
+        self._pro_backend = backend
+        self._status_label.set_text(f"Avvio modello PRO: {backend.label}...")
+        threading.Thread(
+            target=self._load_pro_model, args=(backend,), daemon=True
+        ).start()
+
+    def _load_pro_model(self, backend: Any) -> None:
+        try:
+            import pro
+
+            pro.load_local_model(
+                backend,
                 progress=lambda message: GLib.idle_add(
                     self._status_label.set_text, message
-                )
+                ),
             )
             GLib.idle_add(self._finish_pro_model_check, backend, "")
         except Exception as exc:
+            try:
+                import pro
+
+                pro.release_local_model()
+            except Exception as cleanup_error:
+                exc = RuntimeError(f"{exc}; {cleanup_error}")
             GLib.idle_add(self._finish_pro_model_check, None, str(exc))
 
     def _finish_pro_model_check(self, backend: Any, error: str) -> bool:
+        if self._pro_cleanup_pending or self._pro_cleanup_done:
+            return GLib.SOURCE_REMOVE
         self._pro_checking = False
         self._pro_switch.set_sensitive(True)
         if error:
             self._pro_backend = None
+            self._pro_release_btn.set_sensitive(False)
             self._restoring_ui = True
             self._pro_switch.set_active(False)
             self._restoring_ui = False
             self._config["pro_enabled"] = False
             self._persist_current_config()
             self._show_pro_model_dialog(error)
+            self._enqueue_pending_pro_paths()
         else:
             self._pro_backend = backend
+            self._pro_release_btn.set_sensitive(True)
             self._config["pro_enabled"] = True
             self._persist_current_config()
             self._show_toast(f"PRO attivo: {backend.label}")
+            self._enqueue_pending_pro_paths()
         return GLib.SOURCE_REMOVE
+
+    def _enqueue_pending_pro_paths(self) -> None:
+        paths, self._pending_pro_paths = self._pending_pro_paths, []
+        if paths:
+            if not self._pro_switch.get_active():
+                self._show_toast("PRO non disponibile; avvio trascrizione senza correzione.")
+            self.enqueue_paths(paths)
 
     def _show_pro_model_dialog(self, error: str) -> None:
         import pro
@@ -959,13 +1109,14 @@ class TranscriptionWindow(Adw.ApplicationWindow):
         return "off"
 
     def enqueue_paths(self, paths: list[Path]) -> None:
-        if self._pro_checking:
-            self._show_toast("Attendi la verifica del modello PRO locale.")
-            return
         valid_files = [p for p in paths if p.is_file()]
         skipped = len(paths) - len(valid_files)
         if not valid_files:
             self._show_toast("Seleziona almeno un file audio o video valido.")
+            return
+        if self._pro_checking:
+            self._pending_pro_paths.extend(valid_files)
+            self._show_toast("File in coda, in attesa della scelta del modello PRO.")
             return
 
         was_busy = self._worker.is_busy()
@@ -1356,29 +1507,100 @@ class TranscriptionWindow(Adw.ApplicationWindow):
             self._save_prompt_source_id = None
             self._persist_current_config()
 
+        if self._pro_cleanup_done:
+            return False
+        if self._pro_cleanup_pending:
+            return True
+
         live_busy = (
             self._live_transcriber is not None and self._live_transcriber.is_running()
         )
-        if self._closing_confirmed or (not self._worker.is_busy() and not live_busy):
-            self._stop_pulse()
-            self._stop_elapsed_timer()
-            if self._live_transcriber is not None:
-                self._live_transcriber.stop()
-            self._worker.shutdown(timeout=2.0)
-            return False
+        if self._worker.is_busy() or live_busy:
+            if self._closing_confirmed:
+                self._stop_pulse()
+                self._stop_elapsed_timer()
+                if self._live_transcriber is not None:
+                    self._live_transcriber.stop()
+                self._worker.shutdown(timeout=0.1)
+                self._pro_cleanup_pending = True
+                GLib.timeout_add(250, self._wait_for_worker_before_close)
+                return True
 
-        dialog = Adw.AlertDialog(
-            heading="Trascrizione in corso",
-            body="Vuoi annullare la trascrizione attiva, liberare la GPU e chiudere l'applicazione?",
-        )
-        dialog.add_response("stay", "Continua")
-        dialog.add_response("close", "Annulla e chiudi")
-        dialog.set_response_appearance("close", Adw.ResponseAppearance.DESTRUCTIVE)
-        dialog.set_default_response("stay")
-        dialog.set_close_response("stay")
-        dialog.connect("response", self._on_close_dialog_response)
-        dialog.present(self)
+            dialog = Adw.AlertDialog(
+                heading="Trascrizione in corso",
+                body="Vuoi annullare la trascrizione attiva, liberare la GPU e chiudere l'applicazione?",
+            )
+            dialog.add_response("stay", "Continua")
+            dialog.add_response("close", "Annulla e chiudi")
+            dialog.set_response_appearance("close", Adw.ResponseAppearance.DESTRUCTIVE)
+            dialog.set_default_response("stay")
+            dialog.set_close_response("stay")
+            dialog.connect("response", self._on_close_dialog_response)
+            dialog.present(self)
+            return True
+
+        self._stop_pulse()
+        self._stop_elapsed_timer()
+        if self._live_transcriber is not None:
+            self._live_transcriber.stop()
+        self._worker.shutdown(timeout=0.1)
+        self._start_pro_close_cleanup()
         return True
+
+    def _wait_for_worker_before_close(self) -> bool:
+        live_busy = (
+            self._live_transcriber is not None and self._live_transcriber.is_running()
+        )
+        if self._worker.is_busy() or live_busy:
+            self._worker.shutdown(timeout=0.1)
+            return GLib.SOURCE_CONTINUE
+        self._pro_cleanup_pending = False
+        self._start_pro_close_cleanup()
+        return GLib.SOURCE_REMOVE
+
+    def _start_pro_close_cleanup(self) -> None:
+        self._pro_cleanup_pending = True
+        threading.Thread(
+            target=self._release_pro_resources_before_close, daemon=True
+        ).start()
+
+    def _release_pro_resources_before_close(self) -> None:
+        error = ""
+        try:
+            import pro
+
+            pro.release_local_model()
+        except Exception as exc:
+            error = str(exc)
+        GLib.idle_add(self._finish_pro_close_cleanup, error)
+
+    def _finish_pro_close_cleanup(self, error: str) -> bool:
+        self._pro_cleanup_pending = False
+        if error:
+            dialog = Adw.MessageDialog.new(
+                self,
+                "Impossibile liberare il modello PRO",
+                f"{error}\nPuoi riprovare o chiudere comunque.",
+            )
+            dialog.add_response("retry", "Riprova")
+            dialog.add_response("close", "Chiudi comunque")
+            dialog.set_default_response("retry")
+            dialog.set_close_response("close")
+            dialog.connect("response", self._on_pro_close_cleanup_error)
+            dialog.present()
+        else:
+            self._pro_cleanup_done = True
+            self.close()
+        return GLib.SOURCE_REMOVE
+
+    def _on_pro_close_cleanup_error(
+        self, _dialog: Adw.MessageDialog, response: str
+    ) -> None:
+        if response == "retry":
+            self._start_pro_close_cleanup()
+        else:
+            self._pro_cleanup_done = True
+            self.close()
 
     def _on_close_dialog_response(
         self, _dialog: Adw.AlertDialog, response: str
@@ -1387,6 +1609,9 @@ class TranscriptionWindow(Adw.ApplicationWindow):
             self._closing_confirmed = True
             self._stop_pulse()
             self._stop_elapsed_timer()
+            if self._live_transcriber is not None:
+                self._live_transcriber.stop()
+            self._worker.cancel()
             self._worker.shutdown(timeout=5.0)
             self.close()
 
