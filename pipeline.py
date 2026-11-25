@@ -73,15 +73,18 @@ def correct_transcript(
         payload = {
             "model": model,
             "stream": False,
+            "think": False,
             "messages": [
                 {
                     "role": "system",
                     "content": (
                         "Proofread this speech-recognition transcript in its "
                         "original language. Correct spelling, punctuation, "
-                        "grammar, and obvious recognition errors. Preserve "
-                        "the speaker's meaning, facts, names, order, and "
-                        "level of detail. Do not summarize, translate, add "
+                        "grammar, and obvious recognition errors. Improve "
+                        "readability with natural paragraph breaks and clear "
+                        "phrasing, removing only redundant filler or stutters. "
+                        "Preserve the speaker's meaning, facts, names, order, "
+                        "and level of detail. Do not summarize, translate, add "
                         "information, or explain edits. Return only the "
                         "corrected transcript."
                     ),
@@ -124,3 +127,13 @@ def transcript_paths(project_dir: Path, audio_path: Path) -> tuple[Path, Path]:
         raw_path = output_dir / f"{name}.raw.txt"
         corrected_path = output_dir / f"{name}.corrected.txt"
     return raw_path, corrected_path
+
+
+def next_corrected_path(raw_path: Path) -> Path:
+    name = raw_path.name.removesuffix(".raw.txt")
+    candidate = raw_path.parent / f"{name}.corrected.txt"
+    revision = 1
+    while candidate.exists():
+        candidate = raw_path.parent / f"{name} ({revision}).corrected.txt"
+        revision += 1
+    return candidate

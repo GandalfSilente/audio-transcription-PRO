@@ -6,7 +6,12 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from pipeline import correct_transcript, split_text, transcript_paths
+from pipeline import (
+    correct_transcript,
+    next_corrected_path,
+    split_text,
+    transcript_paths,
+)
 
 
 class PipelineTests(unittest.TestCase):
@@ -35,7 +40,9 @@ class PipelineTests(unittest.TestCase):
         self.assertEqual(correct_transcript("Testo originale"), "Testo corretto.")
         request = urlopen.call_args.args[0]
         self.assertEqual(request.full_url, "http://127.0.0.1:11434/api/chat")
-        self.assertEqual(json.loads(request.data)["model"], "qwen3:8b")
+        payload = json.loads(request.data)
+        self.assertEqual(payload["model"], "qwen3:8b")
+        self.assertFalse(payload["think"])
 
     def test_transcript_paths_preserve_previous_results(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -46,6 +53,16 @@ class PipelineTests(unittest.TestCase):
             next_raw, next_corrected = transcript_paths(Path(directory), audio)
             self.assertNotEqual(next_raw, raw_path)
             self.assertNotEqual(next_corrected, corrected_path)
+
+    def test_repeat_correction_does_not_overwrite_previous_result(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            raw_path = Path(directory) / "lezione.raw.txt"
+            previous = next_corrected_path(raw_path)
+            previous.write_text("Old correction", encoding="utf-8")
+            self.assertEqual(
+                next_corrected_path(raw_path),
+                Path(directory) / "lezione (1).corrected.txt",
+            )
 
 
 if __name__ == "__main__":
