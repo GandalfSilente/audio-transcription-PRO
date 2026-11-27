@@ -729,8 +729,8 @@ class TranscriptionWindow(Adw.ApplicationWindow):
         self._config["pro_enabled"] = self._pro_switch.get_active()
         try:
             engine.save_config(self._config)
-        except OSError:
-            pass
+        except OSError as err:
+            self._show_toast(f"Impossibile salvare le preferenze: {err}")
 
     def _on_model_changed(self, _dropdown: Gtk.DropDown, _pspec: Any) -> None:
         if not self._restoring_ui:
