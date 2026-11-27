@@ -22,7 +22,7 @@ OUTPUT_DIR.mkdir(exist_ok=True)
 
 CONFIG_DIR = (
     Path(os.environ.get("XDG_CONFIG_HOME", str(Path.home() / ".config")))
-    / "trascrizione-audio"
+    / "trascrizione-audio-pro"
 )
 CONFIG_PATH = CONFIG_DIR / "config.json"
 
@@ -721,6 +721,13 @@ class TranscriptionWorker:
                     job = self._queue.popleft()
                     remaining = len(self._queue)
 
+                if job.pro_enabled:
+                    try:
+                        import pro
+
+                        pro.release_local_model()
+                    except Exception:
+                        pass
                 cached_model, cached_model_name, cached_device = self._process_job(
                     job, remaining, cached_model, cached_model_name, cached_device
                 )

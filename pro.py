@@ -416,18 +416,33 @@ def release_local_model() -> None:
 
 def split_text(text: str, max_chars: int = 4500) -> list[str]:
     chunks: list[str] = []
-    current: list[str] = []
-    current_length = 0
-    for word in text.split():
-        extra = len(word) + (1 if current else 0)
-        if current and current_length + extra > max_chars:
-            chunks.append(" ".join(current))
-            current = []
-            current_length = 0
-        current.append(word)
-        current_length += len(word) + (1 if len(current) > 1 else 0)
+    current = ""
+    for para in text.split("\n\n"):
+        para = para.strip()
+        if not para:
+            continue
+        if len(para) <= max_chars:
+            candidate = f"{current}\n\n{para}" if current else para
+            if len(candidate) <= max_chars:
+                current = candidate
+            else:
+                if current:
+                    chunks.append(current)
+                current = para
+            continue
+        if current:
+            chunks.append(current)
+            current = ""
+        for word in para.split():
+            candidate = f"{current} {word}" if current else word
+            if len(candidate) <= max_chars:
+                current = candidate
+            else:
+                if current:
+                    chunks.append(current)
+                current = word
     if current:
-        chunks.append(" ".join(current))
+        chunks.append(current)
     return chunks
 
 

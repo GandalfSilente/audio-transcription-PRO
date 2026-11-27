@@ -1349,6 +1349,8 @@ class TranscriptionWindow(Adw.ApplicationWindow):
 
         # Action buttons state
         self._copy_btn.set_sensitive(self._has_transcript)
+        has_ts = bool(snap.get("speaker_blocks"))
+        self._show_ts_check.set_sensitive(not self._has_transcript or has_ts)
         txt_ready = bool(snap.get("txt_path")) and Path(snap["txt_path"]).is_file()
         self._set_file_button_ready(self._open_txt_btn, txt_ready)
 

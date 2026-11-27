@@ -228,6 +228,11 @@ class ProTests(unittest.TestCase):
         self.assertEqual(" ".join(chunks), text)
         self.assertTrue(all(len(chunk) <= 9 for chunk in chunks))
 
+    def test_chunks_preserve_newlines_and_speaker_tags(self) -> None:
+        text = "[Voce 1]\nCiao.\n\n[Voce 2]\nBene."
+        chunks = pro.split_text(text, max_chars=100)
+        self.assertEqual(chunks, [text])
+
     def test_rename_speaker_tags_in_corrected_text(self) -> None:
         text = "[Voce 1]\nCiao.\n\n[Voce 2]\nBuongiorno."
         renamed = engine.rename_speaker_tags(
