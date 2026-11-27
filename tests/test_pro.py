@@ -8,6 +8,7 @@ from unittest.mock import ANY, patch
 
 import pro
 import engine
+import diarizer
 
 
 class ProTests(unittest.TestCase):
@@ -136,6 +137,47 @@ class ProTests(unittest.TestCase):
             ["/usr/bin/ollama", "stop", "qwen3:8b"],
         )
 
+    def test_release_keeps_backend_for_retry_after_unload_failure(self) -> None:
+        manager = pro.LocalModelManager()
+        backend = pro.LocalBackend("lmstudio", "qwen7b", "LM Studio — Qwen 7B")
+        manager._selected_backend = backend
+        with (
+            patch.object(manager, "_backend_is_loaded", return_value=True),
+            patch(
+                "pro._run_lms",
+                side_effect=[pro.ModelUnavailable("temporary failure"), ""],
+            ) as run_lms,
+        ):
+            with self.assertRaises(pro.ModelUnavailable):
+                manager.release()
+            self.assertIs(manager._selected_backend, backend)
+
+            manager.release()
+
+        self.assertIsNone(manager._selected_backend)
+        self.assertEqual(run_lms.call_count, 2)
+
+    def test_release_reports_missing_ollama_command_and_keeps_backend(self) -> None:
+        manager = pro.LocalModelManager()
+        backend = pro.LocalBackend("ollama", "qwen3:8b", "Ollama — qwen3:8b")
+        manager._selected_backend = backend
+        with (
+            patch.object(manager, "_backend_is_loaded", return_value=True),
+            patch("pro.shutil.which", return_value=None),
+        ):
+            with self.assertRaises(pro.ModelUnavailable):
+                manager.release()
+        self.assertIs(manager._selected_backend, backend)
+
+    def test_release_keeps_backend_when_loaded_state_is_unknown(self) -> None:
+        manager = pro.LocalModelManager()
+        backend = pro.LocalBackend("ollama", "qwen3:8b", "Ollama — qwen3:8b")
+        manager._selected_backend = backend
+        with patch.object(manager, "_backend_is_loaded", return_value=None):
+            with self.assertRaises(pro.ModelUnavailable):
+                manager.release()
+        self.assertIs(manager._selected_backend, backend)
+
     @patch("pro.urllib.request.urlopen")
     def test_correction_uses_local_chat_and_preserves_output(self, urlopen) -> None:
         class Response:
@@ -241,6 +283,38 @@ class ProTests(unittest.TestCase):
             {"Voce 1": "Anna", "Voce 2": "Luca"},
         )
         self.assertEqual(renamed, "[Anna]\nCiao.\n\n[Luca]\nBuongiorno.")
+
+    def test_rename_speaker_tags_does_not_cascade(self) -> None:
+        text = "[Voce 1]\nA\n\n[Voce 2]\nB"
+        renamed = engine.rename_speaker_tags(
+            text,
+            {"Voce 1": "Voce 1", "Voce 2": "Voce 2"},
+            {"Voce 1": "Voce 2", "Voce 2": "Luca"},
+        )
+        self.assertEqual(renamed, "[Voce 2]\nA\n\n[Luca]\nB")
+
+    def test_diarization_checks_cancellation_between_segments(self) -> None:
+        checks = 0
+
+        def check_cancelled() -> None:
+            nonlocal checks
+            checks += 1
+            if checks == 4:
+                raise RuntimeError("cancelled")
+
+        with (
+            patch("diarizer._load_audio_16k", return_value=[0.0] * 32000),
+            patch("diarizer._get_session"),
+            patch("diarizer._extract_embedding") as extract_embedding,
+        ):
+            with self.assertRaisesRegex(RuntimeError, "cancelled"):
+                diarizer.assign_speakers(
+                    Path("lecture.wav"),
+                    [{"start": 0.0, "end": 2.0, "text": "words"}],
+                    mode="on",
+                    check_cancelled=check_cancelled,
+                )
+        extract_embedding.assert_not_called()
 
     @patch("pro.ensure_local_model")
     @patch(

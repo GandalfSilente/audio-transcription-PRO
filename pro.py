@@ -265,9 +265,11 @@ class LocalModelManager:
             if data is None:
                 raise ModelUnavailable("Il server locale di Ollama non è disponibile.")
 
-    def _backend_is_loaded(self, backend: LocalBackend) -> bool:
+    def _backend_is_loaded(self, backend: LocalBackend) -> bool | None:
         if backend.provider == "lmstudio":
             data = _read_json(f"{LM_STUDIO_URL}/api/v0/models", timeout=2)
+            if data is None:
+                return None
             models = data.get("data", []) if data else []
             return any(
                 isinstance(model, dict)
@@ -277,6 +279,8 @@ class LocalModelManager:
             )
         if backend.provider == "ollama":
             data = _read_json(f"{OLLAMA_URL}/api/ps", timeout=2)
+            if data is None:
+                return None
             models = data.get("models", []) if data else []
             return any(
                 isinstance(model, dict)
@@ -346,26 +350,36 @@ class LocalModelManager:
             backend = self._selected_backend
             if backend is not None:
                 try:
-                    if self._backend_is_loaded(backend):
+                    loaded = self._backend_is_loaded(backend)
+                    if loaded is None:
+                        raise ModelUnavailable(
+                            f"Impossibile verificare se il modello {backend.model} "
+                            "è ancora caricato."
+                        )
+                    if loaded:
                         if backend.provider == "lmstudio":
                             _run_lms("unload", backend.model, timeout=60)
                         elif backend.provider == "ollama":
                             executable = shutil.which("ollama")
-                            if executable:
-                                result = subprocess.run(
-                                    [executable, "stop", backend.model],
-                                    capture_output=True,
-                                    text=True,
-                                    timeout=60,
-                                    check=False,
+                            if not executable:
+                                raise ModelUnavailable(
+                                    "Comando Ollama `ollama` non trovato; "
+                                    "impossibile scaricare il modello."
                                 )
-                                if result.returncode:
-                                    raise ModelUnavailable(
-                                        result.stderr.strip() or "Ollama non ha scaricato il modello."
-                                    )
+                            result = subprocess.run(
+                                [executable, "stop", backend.model],
+                                capture_output=True,
+                                text=True,
+                                timeout=60,
+                                check=False,
+                            )
+                            if result.returncode:
+                                raise ModelUnavailable(
+                                    result.stderr.strip() or "Ollama non ha scaricato il modello."
+                                )
                 except (OSError, subprocess.TimeoutExpired, ModelUnavailable) as error:
                     errors.append(str(error))
-                finally:
+                else:
                     self._selected_backend = None
 
             if self._started_lmstudio_daemon:

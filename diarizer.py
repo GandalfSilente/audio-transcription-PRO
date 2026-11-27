@@ -5,7 +5,7 @@ from __future__ import annotations
 
 import threading
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 import numpy as np
 
@@ -117,7 +117,9 @@ def _compute_fbank(audio: np.ndarray, sr: int = 16000) -> np.ndarray:
     return log_mel
 
 
-def _load_audio_16k(file_path: Path) -> np.ndarray:
+def _load_audio_16k(
+    file_path: Path, check_cancelled: Callable[[], None] | None = None
+) -> np.ndarray:
     """Decode audio/video file to 16 kHz mono float32 waveform using PyAV."""
     import av
 
@@ -128,6 +130,8 @@ def _load_audio_16k(file_path: Path) -> np.ndarray:
             raise ValueError("Nessuna traccia audio trovata nel file.")
         stream = container.streams.audio[0]
         for frame in container.decode(stream):
+            if check_cancelled:
+                check_cancelled()
             for rf in resampler.resample(frame):
                 arr = rf.to_ndarray()
                 if arr.ndim == 2:
@@ -149,7 +153,9 @@ def _extract_embedding(session: Any, audio_slice: np.ndarray) -> np.ndarray:
 
 
 def _agglomerative_cosine_cluster(
-    embeddings: np.ndarray, threshold: float
+    embeddings: np.ndarray,
+    threshold: float,
+    check_cancelled: Callable[[], None] | None = None,
 ) -> np.ndarray:
     """Cluster L2-normalized embeddings with average-linkage cosine similarity."""
     n = len(embeddings)
@@ -162,10 +168,14 @@ def _agglomerative_cosine_cluster(
     clusters: list[list[int]] = [[i] for i in range(n)]
 
     while len(clusters) > 1:
+        if check_cancelled:
+            check_cancelled()
         best_sim = -2.0
         best_pair = (-1, -1)
         m = len(clusters)
         for i in range(m):
+            if check_cancelled:
+                check_cancelled()
             ci = clusters[i]
             for j in range(i + 1, m):
                 cj = clusters[j]
@@ -209,6 +219,7 @@ def assign_speakers(
     file_path: Path,
     segments: list[dict[str, Any]],
     mode: str = "auto",
+    check_cancelled: Callable[[], None] | None = None,
 ) -> tuple[list[dict[str, Any]], list[str]]:
     """Assign speaker labels ('Voce 1', 'Voce 2', ...) in chronological order.
 
@@ -219,12 +230,18 @@ def assign_speakers(
     if mode == "off" or not segments:
         return segments, []
 
-    audio = _load_audio_16k(file_path)
+    if check_cancelled:
+        check_cancelled()
+    audio = _load_audio_16k(file_path, check_cancelled=check_cancelled)
+    if check_cancelled:
+        check_cancelled()
     total_samples = len(audio)
     if total_samples == 0:
         return segments, []
 
     session = _get_session()
+    if check_cancelled:
+        check_cancelled()
     sr = 16000
     min_window_samples = int(1.4 * sr)
 
@@ -233,6 +250,8 @@ def assign_speakers(
     durations: list[float] = []
 
     for idx, seg in enumerate(segments):
+        if check_cancelled:
+            check_cancelled()
         start_s = float(seg["start"])
         end_s = float(seg["end"])
         durations.append(max(0.1, end_s - start_s))
@@ -250,6 +269,8 @@ def assign_speakers(
             continue
 
         emb = _extract_embedding(session, audio[c_start:c_end])
+        if check_cancelled:
+            check_cancelled()
         embeddings.append(emb)
         valid_indices.append(idx)
 
@@ -264,7 +285,9 @@ def assign_speakers(
     # 'auto' uses a stricter split threshold (0.50) to avoid false splits on single speakers;
     # 'on' uses 0.56 so multi-speaker conversations separate cleanly.
     threshold = 0.50 if mode == "auto" else 0.56
-    raw_cluster_ids = _agglomerative_cosine_cluster(emb_matrix, threshold=threshold)
+    raw_cluster_ids = _agglomerative_cosine_cluster(
+        emb_matrix, threshold=threshold, check_cancelled=check_cancelled
+    )
 
     # Map valid segments back to all segments (nearest valid neighbor for tiny segments)
     seg_clusters = [-1] * len(segments)
@@ -272,6 +295,8 @@ def assign_speakers(
         seg_clusters[seg_idx] = int(raw_cluster_ids[pos])
 
     for i in range(len(seg_clusters)):
+        if check_cancelled:
+            check_cancelled()
         if seg_clusters[i] == -1:
             # Find nearest valid segment
             best_dist = len(seg_clusters) + 1

@@ -515,11 +515,17 @@ def rename_speaker_tags(
     current_names: dict[str, str],
     new_names: dict[str, str],
 ) -> str:
-    for speaker, new_name in new_names.items():
-        current_name = current_names.get(speaker, speaker)
-        if current_name != new_name:
-            text = text.replace(f"[{current_name}]", f"[{new_name}]")
-    return text
+    replacements = {
+        f"[{current_names.get(speaker, speaker)}]": f"[{new_name}]"
+        for speaker, new_name in new_names.items()
+        if current_names.get(speaker, speaker) != new_name
+    }
+    if not replacements:
+        return text
+    pattern = re.compile(
+        "|".join(re.escape(tag) for tag in sorted(replacements, key=len, reverse=True))
+    )
+    return pattern.sub(lambda match: replacements[match.group()], text)
 
 
 def save_blocks_to_txt(
@@ -1237,7 +1243,10 @@ class TranscriptionWorker:
             import diarizer
 
             raw_segments, ordered_speakers = diarizer.assign_speakers(
-                job.file_path, raw_segments, mode=diar_mode
+                job.file_path,
+                raw_segments,
+                mode=diar_mode,
+                check_cancelled=self._check_cancelled,
             )
             self._check_cancelled()
 
